@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.22"
+VERSION = "1.23"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -1333,8 +1333,8 @@ class App:
                  ("Facturas por NCF", lambda a, b, r: reportes.facturas_por_ncf(self.db, a, b, r)),
                  ("ITBIS cobrado", lambda a, b, r: reportes.itbis_cobrado(self.db, a, b, r)),
                  ("Facturas por producto", lambda a, b, r: reportes.facturas_por_producto(self.db, a, b, r)),
-                 ("Ventas por cliente", lambda a, b, r: reportes.ventas_por_cliente(self.db, a, b, r)),
-                 ("Ventas por producto", lambda a, b, r: reportes.ventas_por_producto(self.db, a, b, r)),
+                 ("Ventas por cliente", lambda a, b, r, x: reportes.ventas_por_cliente(self.db, a, b, r, x)),
+                 ("Ventas por producto", lambda a, b, r, x: reportes.ventas_por_producto(self.db, a, b, r, x)),
                  ("Valor del inventario (a la fecha Hasta)", lambda a, b, r: reportes.valor_inventario(self.db, b, r)),
                  ("Órdenes de compra", lambda a, b, r: reportes.ordenes_compra(self.db, a, b, r)),
                  ("Saldos vencidos (facturas del rango, al día Hasta)", lambda a, b, r: reportes.saldos_vencidos(self.db, a, b, b, r))]
@@ -1342,11 +1342,28 @@ class App:
             ttk.Button(box, text=lab, width=48, command=lambda lab=lab, fn=fn: self.run_rep(lab, fn)).grid(
                 row=1 + i, column=0, columnspan=5, sticky="w", pady=3)
 
+    def elegir_para_reporte(self, lab):
+        """Ventas por cliente / producto: se elige uno o todos. Devuelve codigo, '' = todos, None = cancelado."""
+        if lab == "Ventas por cliente":
+            rows = [("(Todos)", "Todos los clientes")] + [(c["code"], c["name"]) for c in self.db.q(
+                "SELECT code, name FROM clients WHERE COALESCE(ctype,'C')='C' ORDER BY name")]
+            p = Picker(self.root, "Ventas por cliente: elija el cliente", ("Código", "Cliente"), rows, [120, 560])
+        else:
+            rows = [("(Todos)", "Todos los productos")] + [(x["code"], x["descr"]) for x in self.db.q(
+                "SELECT code, descr FROM products ORDER BY code")]
+            p = Picker(self.root, "Ventas por producto: elija el producto", ("Código", "Producto"), rows, [120, 560])
+        if not p.result: return None
+        return "" if p.result[0] == "(Todos)" else p.result[0]
+
     def run_rep(self, lab, fn):
         try:
             a, b = read_dmy(self.rd.get()), read_dmy(self.rh.get())
         except ValueError as e:
             messagebox.showwarning("Fechas", str(e)); return
+        if lab in ("Ventas por cliente", "Ventas por producto"):
+            x = self.elegir_para_reporte(lab)
+            if x is None: return
+            fn = (lambda f, x: lambda a, b, r: f(a, b, r, x or None))(fn, x)
         self.root.config(cursor="watch"); self.root.update()
         try:
             ruta = fn(a, b, self.rep_path(lab.split(" (")[0].replace(" ", "_")))

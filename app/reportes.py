@@ -362,7 +362,7 @@ def facturas_por_producto(db, d1, d2, ruta):
     return t.save()
 
 
-def ventas_por_cliente(db, d1, d2, ruta):
+def ventas_por_cliente(db, d1, d2, ruta, cliente=None):
     dias = (d2 - d1).days
     tit = ["Ventas por Cliente", f"Desde {dmy(d1)} hasta {dmy(d2)}  ( Para {dias} dias, En Pesos )"]
     cols = [(15, "l", "", "Fecha"), (110, "r", "Nro.", "Factura"), (120, "l", "", "NCF"),
@@ -372,6 +372,7 @@ def ventas_por_cliente(db, d1, d2, ruta):
     grupos = {}
     for r in db.q("SELECT * FROM invoices WHERE deleted=0 AND date BETWEEN ? AND ? ORDER BY date, nro",
                   (fmt_date(d1), fmt_date(d2))):
+        if cliente and r["client"] != cliente: continue
         grupos.setdefault(r["client"], []).append(r)
     nombres = {}
     for c in grupos:
@@ -395,7 +396,7 @@ def ventas_por_cliente(db, d1, d2, ruta):
     return t.save()
 
 
-def ventas_por_producto(db, d1, d2, ruta):
+def ventas_por_producto(db, d1, d2, ruta, producto=None):
     dias = (d2 - d1).days
     tit = ["Ventas por Producto", f"Desde {dmy(d1)} hasta {dmy(d2)}  ( Para {dias} dias, En Pesos )"]
     cols = [(15, "l", "", "Código"), (75, "l", "", "Descripción"), (300, "r", "", "Cantidad"),
@@ -405,6 +406,7 @@ def ventas_por_producto(db, d1, d2, ruta):
     prods = {}
     for l in db.q("SELECT l.code, l.descr, l.qty, l.price, l.cost, l.nro FROM lines l JOIN invoices i ON i.nro=l.nro "
                   "WHERE i.deleted=0 AND i.date BETWEEN ? AND ? ORDER BY l.code", (fmt_date(d1), fmt_date(d2))):
+        if producto and l["code"] != producto: continue
         p = prods.setdefault(l["code"], dict(descr=l["descr"], qty=0, vta=0, cst=0, facts=set()))
         p["qty"] += l["qty"]; p["vta"] += l["qty"] * l["price"]; p["cst"] += l["qty"] * (l["cost"] or 0)
         p["facts"].add(l["nro"])
