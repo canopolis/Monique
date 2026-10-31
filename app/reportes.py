@@ -362,12 +362,16 @@ def facturas_por_producto(db, d1, d2, ruta):
     return t.save()
 
 
+def _costo_factura(db, nro):
+    return round(sum(l["qty"] * (l["cost"] or 0) for l in db.q("SELECT qty, cost FROM lines WHERE nro=?", (nro,))), 2)
+
+
 def ventas_por_cliente(db, d1, d2, ruta, cliente=None):
+    """Por cliente: cada factura con su costo de adquisicion, ITBIS, total y ganancia (total - ITBIS - costo)."""
     dias = (d2 - d1).days
     tit = ["Ventas por Cliente", f"Desde {dmy(d1)} hasta {dmy(d2)}  ( Para {dias} dias, En Pesos )"]
-    cols = [(15, "l", "", "Fecha"), (110, "r", "Nro.", "Factura"), (120, "l", "", "NCF"),
-            (300, "r", "", "Subtotal"), (360, "r", "", "ITBIS"), (420, "r", "", "Descuento"),
-            (500, "r", "Total", "Factura"), (588, "r", "", "Saldo")]
+    cols = [(15, "l", "", "Fecha"), (130, "r", "Nro.", "Factura"), (250, "r", "Costo de", "adquisición"),
+            (350, "r", "", "ITBIS"), (460, "r", "Total", "Factura"), (580, "r", "", "Ganancia")]
     t = Tabla(db, ruta, tit, cols)
     grupos = {}
     for r in db.q("SELECT * FROM invoices WHERE deleted=0 AND date BETWEEN ? AND ? ORDER BY date, nro",
@@ -378,48 +382,50 @@ def ventas_por_cliente(db, d1, d2, ruta, cliente=None):
     for c in grupos:
         cl = db.one("SELECT name FROM clients WHERE code=?", (c,))
         nombres[c] = (cl["name"] if cl and cl["name"] else grupos[c][0]["name"]) or ""
-    G = [0, 0, 0, 0, 0, 0]
+    G = [0, 0, 0, 0, 0]
     for c in sorted(grupos, key=lambda c: nombres[c].upper()):
         t.need(50); t.space(6); t.text(15, f"{c}  -  {nombres[c]}", True)
-        S = [0, 0, 0, 0, 0, 0]
+        S = [0, 0, 0, 0, 0]
         for r in grupos[c]:
-            saldo = db.invoice_saldo(r["nro"])
-            t.row([dmy(r["date"]), r["nro"], r["ncf"] or "", n2(r["subtotal"]), n2(r["itbis"] or 0),
-                   n2(r["discount"] or 0), n2(r["total"]), n2(saldo)])
-            for i, v in enumerate((1, r["subtotal"], r["itbis"] or 0, r["discount"] or 0, r["total"], saldo)):
-                S[i] += v
-        t.line()
-        t.row(["", S[0], "factura(s)", n2(S[1]), n2(S[2]), n2(S[3]), n2(S[4]), n2(S[5])], True)
+            costo = _costo_factura(db, r["nro"]); itb = r["itbis"] or 0
+            gan = r["total"] - itb - costo
+            t.row([dmy(r["date"]), r["nro"], n2(costo), n2(itb), n2(r["total"]), n2(gan)])
+            for k, v in enumerate((1, costo, itb, r["total"], gan)):
+                S[k] += v
         G = [a + b for a, b in zip(G, S)]
-    t.space(12)
-    t.row(["", G[0], f"factura(s) de {len(grupos)} cliente(s)", n2(G[1]), n2(G[2]), n2(G[3]), n2(G[4]), n2(G[5])], True)
+    t.space(6); t.line()
+    t.row([f"TOTAL ({G[0]} fact.)", "", n2(G[1]), n2(G[2]), n2(G[3]), n2(G[4])], True)
     return t.save()
 
 
 def ventas_por_producto(db, d1, d2, ruta, producto=None):
+    """Por producto: cada venta con cliente, costo de adquisicion, ITBIS, total y ganancia (total - ITBIS - costo)."""
     dias = (d2 - d1).days
     tit = ["Ventas por Producto", f"Desde {dmy(d1)} hasta {dmy(d2)}  ( Para {dias} dias, En Pesos )"]
-    cols = [(15, "l", "", "Código"), (75, "l", "", "Descripción"), (300, "r", "", "Cantidad"),
-            (340, "r", "", "Facturas"), (415, "r", "", "Ventas"), (480, "r", "", "Costo"),
-            (545, "r", "", "Ganancia"), (588, "r", "", "Exist.")]
+    cols = [(15, "l", "", "Fecha"), (95, "r", "Nro.", "Factura"), (105, "l", "", "Cliente"), (305, "r", "", "Cant."),
+            (380, "r", "Costo de", "adquisición"), (440, "r", "", "ITBIS"), (515, "r", "", "Total"), (588, "r", "", "Ganancia")]
     t = Tabla(db, ruta, tit, cols)
     prods = {}
-    for l in db.q("SELECT l.code, l.descr, l.qty, l.price, l.cost, l.nro FROM lines l JOIN invoices i ON i.nro=l.nro "
-                  "WHERE i.deleted=0 AND i.date BETWEEN ? AND ? ORDER BY l.code", (fmt_date(d1), fmt_date(d2))):
+    for l in db.q("SELECT l.code, l.descr, l.qty, l.price, l.cost, l.itbis, l.nro, i.date, i.name "
+                  "FROM lines l JOIN invoices i ON i.nro=l.nro "
+                  "WHERE i.deleted=0 AND i.date BETWEEN ? AND ? ORDER BY l.code, i.date, i.nro",
+                  (fmt_date(d1), fmt_date(d2))):
         if producto and l["code"] != producto: continue
-        p = prods.setdefault(l["code"], dict(descr=l["descr"], qty=0, vta=0, cst=0, facts=set()))
-        p["qty"] += l["qty"]; p["vta"] += l["qty"] * l["price"]; p["cst"] += l["qty"] * (l["cost"] or 0)
-        p["facts"].add(l["nro"])
-    G = [0, 0, 0]
+        prods.setdefault(l["code"], []).append(l)
+    G = [0, 0, 0, 0, 0]
     for code in sorted(prods):
-        p = prods[code]
         ficha = db.one("SELECT descr FROM products WHERE code=?", (code,))
-        descr = (ficha["descr"] if ficha else p["descr"]) or ""
-        t.row([code, descr[:38], n2(p["qty"]), len(p["facts"]), n2(p["vta"]), n2(p["cst"]), n2(p["vta"] - p["cst"]),
-               f"{db.stock(code):,.0f}" if ficha else ""])
-        G = [G[0] + p["vta"], G[1] + p["cst"], G[2] + p["vta"] - p["cst"]]
-    t.line()
-    t.row(["", f"{len(prods)} producto(s)", "", "", n2(G[0]), n2(G[1]), n2(G[2]), ""], True)
+        t.need(50); t.space(6); t.text(15, f"{code}  -  {(ficha['descr'] if ficha else prods[code][0]['descr']) or ''}", True)
+        S = [0, 0, 0, 0, 0]
+        for l in prods[code]:
+            sub = l["qty"] * l["price"]; costo = l["qty"] * (l["cost"] or 0)
+            itb = round(sub * (l["itbis"] or 0) / 100, 2); tot = sub + itb; gan = tot - itb - costo
+            t.row([dmy(l["date"]), l["nro"], (l["name"] or "")[:34], n2(l["qty"]), n2(costo), n2(itb), n2(tot), n2(gan)])
+            for k, v in enumerate((l["qty"], costo, itb, tot, gan)):
+                S[k] += v
+        G = [a + b for a, b in zip(G, S)]
+    t.space(6); t.line()
+    t.row(["TOTAL", "", "", n2(G[0]) if producto else "", n2(G[1]), n2(G[2]), n2(G[3]), n2(G[4])], True)
     return t.save()
 
 
