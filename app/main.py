@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.19"
+VERSION = "1.22"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -687,6 +687,50 @@ class DocTab:
 
 
 # ---------------- ventana principal ----------------
+def dialogo_pago(parent, n, saldo):
+    """Pago total (el sistema pone el saldo) o parcial (se escribe el monto). Devuelve (monto, fecha, forma, nota) o None."""
+    top = tk.Toplevel(parent); top.title(f"Pago factura {n}"); top.transient(parent); top.grab_set(); top.resizable(False, False)
+    tipo = tk.StringVar(value="total"); vm = tk.StringVar(value=f"{saldo:.2f}")
+    vf = tk.StringVar(value=dmy(datetime.date.today())); vp = tk.StringVar(value="Transferencia"); vn = tk.StringVar()
+    res = {}
+    ttk.Label(top, text=f"Factura {n}    Saldo pendiente: {m2(saldo)}", font=("Segoe UI", 10, "bold")).grid(
+        row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 6))
+    fr = ttk.Frame(top); fr.grid(row=1, column=0, columnspan=2, sticky="w", padx=10)
+    em = ttk.Entry(top, textvariable=vm, width=16)
+    def cambio(*a):
+        if tipo.get() == "total":
+            vm.set(f"{saldo:.2f}"); em.state(["readonly"])
+        else:
+            em.state(["!readonly"]); vm.set(""); em.focus_set()
+    ttk.Radiobutton(fr, text="Pago total", value="total", variable=tipo, command=cambio).pack(side="left", padx=(0, 12))
+    ttk.Radiobutton(fr, text="Pago parcial", value="parcial", variable=tipo, command=cambio).pack(side="left")
+    filas = [("Monto", em), ("Fecha", fecha_entry(top, vf)),
+             ("Forma de pago", ttk.Combobox(top, textvariable=vp, values=["Efectivo", "Transferencia", "Cheque", "Tarjeta"],
+                                            width=14, state="readonly")),
+             ("Nota", ttk.Entry(top, textvariable=vn, width=30))]
+    for i, (lab, w) in enumerate(filas, 2):
+        ttk.Label(top, text=lab).grid(row=i, column=0, sticky="e", padx=(10, 6), pady=3)
+        w.grid(row=i, column=1, sticky="w", padx=(0, 10), pady=3)
+    cambio()
+    def ok():
+        try:
+            monto = saldo if tipo.get() == "total" else num(vm.get())
+            fecha = read_dmy(vf.get())
+        except ValueError as e:
+            messagebox.showwarning("Pago", str(e) if "Fecha" in str(e) else "Monto no válido.", parent=top); return
+        if monto <= 0:
+            messagebox.showwarning("Pago", "Escriba el monto del pago parcial.", parent=top); return
+        if monto > saldo + 0.005:
+            messagebox.showwarning("Pago", f"El monto no puede ser mayor que el saldo ({m2(saldo)}).", parent=top); return
+        res["r"] = (round(monto, 2), fecha, vp.get(), vn.get().strip() or ("Pago total" if tipo.get() == "total" else "Pago parcial"))
+        top.destroy()
+    bf = ttk.Frame(top); bf.grid(row=len(filas) + 2, column=0, columnspan=2, pady=10)
+    ttk.Button(bf, text="Registrar pago", command=ok).pack(side="left", padx=6)
+    ttk.Button(bf, text="Cancelar", command=top.destroy).pack(side="left", padx=6)
+    top.wait_window()
+    return res.get("r")
+
+
 def elegir_carpeta_inicial(root):
     """La carpeta la escoge el usuario. Se pregunta la primera vez o si ya no se encuentra."""
     loc = leer_ubicacion()
@@ -882,9 +926,11 @@ class App:
         saldo = self.db.invoice_saldo(n)
         if saldo <= 0.005:
             messagebox.showinfo("Pago", "Esa factura ya está pagada."); return
-        if messagebox.askyesno("Pago", f"¿Marcar la factura {n} como pagada hoy por {m2(saldo)}?"):
-            self.db.add_payment(n, saldo, "Efectivo", datetime.date.today(), "Marcada pagada")
-            self.refresh_all()
+        r = dialogo_pago(self.root, n, saldo)
+        if not r: return
+        monto, fecha, forma, nota = r
+        self.db.add_payment(n, monto, forma, fecha, nota)
+        self.refresh_all()
 
     def marcar_no_pagada(self):
         n = self.sel_v()
@@ -1287,6 +1333,8 @@ class App:
                  ("Facturas por NCF", lambda a, b, r: reportes.facturas_por_ncf(self.db, a, b, r)),
                  ("ITBIS cobrado", lambda a, b, r: reportes.itbis_cobrado(self.db, a, b, r)),
                  ("Facturas por producto", lambda a, b, r: reportes.facturas_por_producto(self.db, a, b, r)),
+                 ("Ventas por cliente", lambda a, b, r: reportes.ventas_por_cliente(self.db, a, b, r)),
+                 ("Ventas por producto", lambda a, b, r: reportes.ventas_por_producto(self.db, a, b, r)),
                  ("Valor del inventario (a la fecha Hasta)", lambda a, b, r: reportes.valor_inventario(self.db, b, r)),
                  ("Órdenes de compra", lambda a, b, r: reportes.ordenes_compra(self.db, a, b, r)),
                  ("Saldos vencidos (facturas del rango, al día Hasta)", lambda a, b, r: reportes.saldos_vencidos(self.db, a, b, b, r))]
@@ -1431,7 +1479,8 @@ class App:
     def texto_respaldo(self):
         return (f"Carpeta: {self.db.loc}\n"
                 "Dentro: datos.db y las carpetas " + ", ".join(SUB.values()) + ".\n"
-                "Al cerrar el programa se hace un respaldo automático en la carpeta Respaldos.\n"
+                "Al cerrar se hace un respaldo en Respaldos\\Cierre, solo si hubo cambios desde el último respaldo.\n"
+                "Los manuales y los de antes de importar o restaurar van a Respaldos\\Antes de cerrar.\n"
                 "Al importar un respaldo de Monica se actualizan sus datos; lo que hizo en este programa se conserva.")
 
     def importar(self, zip_):

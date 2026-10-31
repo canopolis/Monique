@@ -8,6 +8,8 @@ CARPETA_RESPALDO = "Respaldo Facturacion Canopolis"   # nombre usado por version
 # Subcarpetas dentro de la carpeta que elige el usuario
 SUB = {"F": "Facturas", "Q": "Cotizaciones", "G": "Conduces", "O": "Ordenes de compra",
        "NC": "Notas de credito", "ND": "Notas de debito", "R": "Reportes", "B": "Respaldos"}
+RESP_CIERRE = "Cierre"
+RESP_ANTES = "Antes de cerrar"
 PREF = {"fa": "F", "es": "Q", "guia": "G", "orden": "O", "nc": "NC", "nd": "ND"}
 
 def _puntero():
@@ -42,6 +44,11 @@ def guardar_ubicacion(loc):
 def crear_subcarpetas(loc):
     for s in SUB.values():
         os.makedirs(os.path.join(loc, s), exist_ok=True)
+    rb = os.path.join(loc, SUB["B"])
+    for s in (RESP_CIERRE, RESP_ANTES):
+        os.makedirs(os.path.join(rb, s), exist_ok=True)
+    for f in glob.glob(os.path.join(rb, "respaldo_*.db")):   # respaldos sueltos de versiones anteriores
+        _mv(f, os.path.join(rb, RESP_CIERRE if f.endswith("_cierre.db") else RESP_ANTES))
 
 def _mv(f, carpeta):
     os.makedirs(carpeta, exist_ok=True)
@@ -60,9 +67,13 @@ def _mover_contenido(origen, loc):
     db = os.path.join(origen, "datos.db")
     if os.path.exists(db):
         _mv(db, loc)
+    rb = os.path.join(loc, SUB["B"])
     for b in (origen, os.path.join(origen, SUB["B"])):
         for f in glob.glob(os.path.join(b, "respaldo_*.db")):
-            _mv(f, os.path.join(loc, SUB["B"]))
+            _mv(f, os.path.join(rb, RESP_CIERRE if f.endswith("_cierre.db") else RESP_ANTES))
+        for s in (RESP_CIERRE, RESP_ANTES):
+            for f in glob.glob(os.path.join(b, s, "respaldo_*.db")):
+                _mv(f, os.path.join(rb, s))
     vieja = os.path.join(origen, "facturas_pdf")
     if os.path.isdir(vieja):
         for f in glob.glob(os.path.join(vieja, "*")):
@@ -785,15 +796,29 @@ class DB:
         """Carpeta de respaldos elegida en Configuracion (se crea si no existe) o la de siempre."""
         return self.carpeta("B")
 
+    def _ultimo_respaldo(self):
+        fs = glob.glob(os.path.join(self.backup_dir(), "*", "respaldo_*.db"))
+        return max(fs, key=os.path.getmtime) if fs else None
+
     def backup(self, motivo="cierre"):
+        """Al cerrar solo se hace respaldo si hubo cambios desde el ultimo respaldo. Devuelve la ruta o None."""
+        import filecmp
         self.con.commit()
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        bdir = self.backup_dir()
+        bdir = os.path.join(self.backup_dir(), RESP_CIERRE if motivo == "cierre" else RESP_ANTES)
+        os.makedirs(bdir, exist_ok=True)
         dst = os.path.join(bdir, f"respaldo_{ts}_{motivo}.db")
-        b = sqlite3.connect(dst)
+        tmp = dst + ".tmp"
+        b = sqlite3.connect(tmp)
         with b:
             self.con.backup(b)
         b.close()
+        if motivo == "cierre":
+            ult = self._ultimo_respaldo()
+            if ult and filecmp.cmp(tmp, ult, shallow=False):
+                os.remove(tmp)
+                return None   # sin cambios: no se repite el respaldo
+        os.replace(tmp, dst)
         keep = int(self.cfg("max_respaldos") or 60)
         files = sorted(glob.glob(os.path.join(bdir, "respaldo_*.db")))
         for f in files[:-keep]:
