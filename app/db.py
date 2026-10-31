@@ -818,6 +818,35 @@ class DB:
                 out.append((r, s))
         return out
 
+    def open_invoices_al(self, al):
+        """Facturas con saldo > 0 a la fecha al (date o 'AAAA-MM-DD'): al saldo de hoy se le devuelven
+        los pagos, notas de credito y notas de debito con fecha posterior; no entran facturas posteriores."""
+        al = al if isinstance(al, str) else fmt_date(al)
+        inv = {r["nro"]: r for r in self.q("SELECT * FROM invoices WHERE deleted=0")}
+        pays = {r[0]: r[1] for r in self.q("SELECT nro, SUM(amount) FROM payments GROUP BY nro")}
+        adj = self.notes_adj()
+        despues = {}
+        def suma(n, m):
+            despues[n] = despues.get(n, 0) + m
+        for r in self.q("SELECT nro_fact, tipo, monto FROM ledger WHERE tipo IN ('P','C','D') AND date>?", (al,)):
+            i = inv.get(r["nro_fact"])
+            if i is None or (r["tipo"] == "P" and i["unpaid"]):
+                continue
+            suma(r["nro_fact"], r["monto"] if r["tipo"] in ("P", "C") else -r["monto"])
+        for r in self.q("SELECT nro, amount FROM payments WHERE date>?", (al,)):
+            suma(r["nro"], r["amount"])
+        for r in self.q("SELECT kind, factura, total FROM odocs WHERE kind IN ('NC','ND') AND deleted=0 "
+                        "AND origin='app' AND factura>0 AND date>?", (al,)):
+            suma(r["factura"], r["total"] if r["kind"] == "NC" else -r["total"])
+        out = []
+        for n, r in sorted(inv.items(), key=lambda kv: (kv[1]["date"] or "", kv[0])):
+            if (r["date"] or "") > al:
+                continue
+            s = round(r["saldo_base"] - pays.get(n, 0) + adj.get(n, 0) + despues.get(n, 0), 2)
+            if s > 0.005:
+                out.append((r, s))
+        return out
+
     # ---------- respaldo ----------
     def backup_dir(self):
         """Carpeta de respaldos elegida en Configuracion (se crea si no existe) o la de siempre."""

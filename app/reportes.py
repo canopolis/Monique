@@ -138,21 +138,56 @@ def _envolver(texto, font, size, ancho):
 
 def estado_cuenta_cliente(db, clientes, desde, hasta, ruta):
     """Estado de cuenta del cliente + mensaje de lo pendiente (vigente o vencido) + copia de cada factura pendiente."""
-    import os, tempfile
+    import io
     from pdf_factura import generar_factura
-    c = canvas.Canvas(ruta, pagesize=letter); c.setTitle("Estado de cuenta"); c.setLineWidth(0.6)
+    from pypdf import PdfReader, PdfWriter
+    w = PdfWriter()
+    hechos = []          # clientes con su estado de cuenta en el PDF
+    fallos = []          # (cliente, motivo) de los que no se pudieron hacer
+    for code in clientes:
+        try:
+            buf = io.BytesIO()
+            if not _estado_un_cliente(db, code, desde, hasta, buf):
+                fallos.append((code, "no existe en Clientes")); continue
+            for pg in PdfReader(io.BytesIO(buf.getvalue())).pages:
+                w.add_page(pg)
+            hechos.append(code)
+        except Exception as e:
+            fallos.append((code, str(e) or type(e).__name__)); continue
+        # copia de cada factura pendiente justo despues de su estado de cuenta
+        for r, _ in db.open_invoices(code):
+            if (r["date"] or "") > fmt_date(hasta):
+                continue
+            try:
+                fb = io.BytesIO()
+                generar_factura(db, r["nro"], fb)
+                for pg in PdfReader(io.BytesIO(fb.getvalue())).pages:
+                    w.add_page(pg)
+            except Exception as e:
+                fallos.append((code, f"copia de la factura {r['nro']}: {e}"))
+    if not hechos:
+        c = canvas.Canvas(buf := io.BytesIO(), pagesize=letter)
+        c.setFont(H_, 10); c.drawString(40, 700, "Sin clientes."); c.showPage(); c.save()
+        w.add_page(PdfReader(io.BytesIO(buf.getvalue())).pages[0])
+    out = io.BytesIO(); w.write(out)
+    with open(ruta, "wb") as fh:
+        fh.write(out.getvalue())
+    return ruta, hechos, fallos
+
+
+def _estado_un_cliente(db, code, desde, hasta, destino):
+    """Dibuja el estado de cuenta de un cliente en destino. Devuelve False si el cliente no existe."""
+    c = canvas.Canvas(destino, pagesize=letter); c.setTitle("Estado de cuenta"); c.setLineWidth(0.6)
     d1, d2 = fmt_date(desde), fmt_date(hasta)
     emp = db.cfg("emp_nombre") or ""
     ciudad = (db.cfg("emp_l2") or "").title()
     rnc = db.cfg("emp_l5") or ""
-    adjuntar = []          # (posicion en paginas, [facturas]) para insertar las copias despues de cada estado
-    paginas = [0]
     X = dict(fecha=30, nro=118, tipo=126, ref=222, venc=300, deb=420, cre=500, bal=582)
-    hechos = 0
-    for code in clientes:
+    paginas = [0]
+    if True:
         cl = db.one("SELECT * FROM clients WHERE code=?", (code,))
-        if not cl: continue
-        hechos += 1
+        if not cl:
+            return False
         ents = db.ledger_entries(code)
         previo = sum(e["monto"] for e in ents if (e["date"] or "") < d1)
         rango = [e for e in ents if d1 <= (e["date"] or "") <= d2]
@@ -230,31 +265,9 @@ def estado_cuenta_cliente(db, clientes, desde, hasta, ruta):
             else:
                 est = "sin fecha de vencimiento"
             p.t(40, top, f"•  Factura No. {r['nro']}: RD${n2(s)} — {est}", H_, 9); top += 13
-        c.showPage(); paginas[0] += 1
-        adjuntar.append((paginas[0], [r["nro"] for r, _ in pend]))
-    if not hechos:
-        c.setFont(H_, 10); c.drawString(40, 700, "Sin clientes."); c.showPage()
+        c.showPage()
     c.save()
-    if not any(n for _, n in adjuntar):
-        return ruta
-    # copia de cada factura pendiente justo despues de su estado de cuenta
-    from pypdf import PdfReader, PdfWriter
-    tmpd = tempfile.mkdtemp()
-    base = PdfReader(ruta); w = PdfWriter(); i = 0
-    for hasta_pag, nros in adjuntar:
-        while i < hasta_pag:
-            w.add_page(base.pages[i]); i += 1
-        for n in nros:
-            f = os.path.join(tmpd, f"fa_{n}.pdf")
-            try:
-                generar_factura(db, n, f)
-                for pg in PdfReader(f).pages: w.add_page(pg)
-            except Exception:
-                pass
-    while i < len(base.pages):
-        w.add_page(base.pages[i]); i += 1
-    with open(ruta, "wb") as fh: w.write(fh)
-    return ruta
+    return True
 
 
 # ------------------------------------------------------------------ saldos vencidos
@@ -263,7 +276,7 @@ def saldos_datos(db, desde, hasta, al, ap=False):
     d1, d2 = fmt_date(desde), fmt_date(hasta)
     names = {r["code"]: r["name"] for r in db.q("SELECT code,name FROM clients")}
     res = {}
-    for inv, saldo in (db.open_payables() if ap else db.open_invoices()):
+    for inv, saldo in (db.open_payables() if ap else db.open_invoices_al(al)):
         if not (d1 <= (inv["date"] or "") <= d2):
             continue
         due = parse_date(inv["due"]) or parse_date(inv["date"])

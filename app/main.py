@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.32"
+VERSION = "1.34"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -1408,7 +1408,17 @@ class App:
                 return
             clientes = sorted({inv["client"] for inv, _ in self.db.open_invoices()})
         ruta = self.rep_path(f"Estado_Cta_{code}" if code else "Estado_Cta_todos")
-        reportes.estado_cuenta(self.db, clientes, d1, d2, ruta); open_file(ruta)
+        try:
+            ruta, hechos, fallos = reportes.estado_cuenta(self.db, clientes, d1, d2, ruta)
+        except Exception as e:
+            messagebox.showerror("Estado de cuenta", f"No se pudo hacer el estado de cuenta:\n{e}"); return
+        if fallos:
+            det = "\n".join(f"{c}: {m}" for c, m in fallos[:15]) + ("\n..." if len(fallos) > 15 else "")
+            messagebox.showwarning("Estado de cuenta", f"Se hicieron {len(hechos)} de {len(clientes)} clientes.\n"
+                                   f"Problemas:\n{det}")
+        elif not code:
+            messagebox.showinfo("Estado de cuenta", f"Estados de cuenta hechos: {len(hechos)} clientes.")
+        open_file(ruta)
 
     def pdf_saldos(self):
         try:
