@@ -3,12 +3,12 @@ import os, sys, datetime, traceback, subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from db import DB, TIPOS, TIPOS_FACTURA, fmt_date, parse_date
+from db import DB, leer_ubicacion, guardar_ubicacion, migrar_viejas, crear_subcarpetas, SUB, TIPOS, TIPOS_FACTURA, fmt_date, parse_date
 from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.15"
+VERSION = "1.18"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -687,10 +687,37 @@ class DocTab:
 
 
 # ---------------- ventana principal ----------------
+def elegir_carpeta_inicial(root):
+    """La carpeta la escoge el usuario. Se pregunta la primera vez o si ya no se encuentra."""
+    loc = leer_ubicacion()
+    if loc and os.path.isdir(loc):
+        return loc
+    msg = ("Elija la carpeta donde se guardará todo:\nlos datos, las facturas, conduces, cotizaciones,\n"
+           "órdenes, notas, reportes y respaldos.") if not loc else (
+           f"No se encuentra la carpeta:\n{loc}\n\nElija dónde está, o una carpeta nueva.")
+    while True:
+        messagebox.showinfo("Carpeta del programa", msg, parent=root)
+        d = filedialog.askdirectory(title="Carpeta del programa", mustexist=False, parent=root)
+        if not d:
+            if messagebox.askyesno("Carpeta del programa", "Sin carpeta el programa no puede abrir.\n¿Salir?", parent=root):
+                root.destroy(); sys.exit(0)
+            continue
+        d = os.path.normpath(d)
+        try:
+            os.makedirs(d, exist_ok=True)
+            p = os.path.join(d, ".prueba_escritura"); open(p, "w").close(); os.remove(p)
+        except OSError as e:
+            messagebox.showwarning("Carpeta del programa", f"No se puede usar esa carpeta:\n{e}", parent=root); continue
+        migrar_viejas(d); crear_subcarpetas(d); guardar_ubicacion(d)
+        return d
+
+
 class App:
     def __init__(self):
-        self.db = DB()
-        self.root = tk.Tk()
+        self.root = tk.Tk(); self.root.withdraw()
+        loc = elegir_carpeta_inicial(self.root)
+        self.db = DB(loc=loc)
+        self.root.deiconify()
         self.root.title(f"Facturación Canopolis {VERSION}")
         self.root.geometry("1200x720")
         try:
@@ -722,10 +749,10 @@ class App:
 
     def doc_path(self, kind, nro):
         pref = {"Q": "es", "G": "guia", "O": "orden", "NC": "nc", "ND": "nd"}[kind]
-        return os.path.join(self.db.dir, "facturas_pdf", f"{pref}_{nro}.pdf")
+        return os.path.join(self.db.carpeta(kind), f"{pref}_{nro}.pdf")
 
     def pdf_path(self, nro):
-        return os.path.join(self.db.dir, "facturas_pdf", f"fa_{nro}.pdf")
+        return os.path.join(self.db.carpeta("F"), f"fa_{nro}.pdf")
 
     def refresh_all(self):
         self.load_ventas(); self.load_clientes(); self.load_productos(); self.load_seq(); self.load_cxc(); self.load_cxp(); self.update_banner()
@@ -1218,7 +1245,7 @@ class App:
         open_file(ruta)
 
     def rep_path(self, nombre):
-        d = os.path.join(self.db.dir, "reportes"); os.makedirs(d, exist_ok=True)
+        d = self.db.carpeta("R")
         return os.path.join(d, f"{nombre}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
 
     def pdf_estado(self):
@@ -1361,25 +1388,25 @@ class App:
         ttk.Button(box, text="Importar respaldo de Monica (carpeta)", command=lambda: self.importar(False), width=45).pack(anchor="w", pady=4)
         ttk.Button(box, text="Hacer respaldo ahora", command=self.respaldar, width=45).pack(anchor="w", pady=4)
         ttk.Button(box, text="Restaurar un respaldo de este programa", command=self.restaurar, width=45).pack(anchor="w", pady=4)
-        ttk.Button(box, text="Abrir carpeta de datos", command=lambda: open_file(self.db.dir), width=45).pack(anchor="w", pady=4)
-        ttk.Button(box, text="Abrir carpeta de respaldos", command=lambda: open_file(self.db.backup_dir()), width=45).pack(anchor="w", pady=4)
-        uf = ttk.LabelFrame(box, text="Ubicación a guardar respaldos"); uf.pack(anchor="w", fill="x", pady=(14, 4))
-        self.vbk = tk.StringVar(value=self.db.cfg("carpeta_respaldos"))
+        ttk.Button(box, text="Abrir carpeta del programa", command=lambda: open_file(self.db.loc), width=45).pack(anchor="w", pady=4)
+        uf = ttk.LabelFrame(box, text="Carpeta del programa (datos, documentos y respaldos)"); uf.pack(anchor="w", fill="x", pady=(14, 4))
+        self.vbk = tk.StringVar(value=self.db.loc)
         ttk.Entry(uf, textvariable=self.vbk, width=70).pack(side="left", padx=6, pady=6)
         ttk.Button(uf, text="Elegir carpeta...", command=self.elegir_carpeta_bk).pack(side="left", padx=3)
         ttk.Button(uf, text="Guardar ubicación", command=self.guardar_carpeta_bk).pack(side="left", padx=3)
-        ttk.Label(box, text="(vacío = carpeta 'Respaldo Facturacion Canopolis' dentro de Documentos\\FacturacionCanopolis; "
-                            "si la carpeta no existe, se crea)").pack(anchor="w")
+        ttk.Label(box, text="(si la carpeta no existe, se crea; todo se mueve ahí)").pack(anchor="w")
         self.lbl_r = ttk.Label(box, text="", justify="left"); self.lbl_r.pack(anchor="w", pady=12)
         self.lbl_r.config(text=self.texto_respaldo())
 
     def elegir_carpeta_bk(self):
-        d = filedialog.askdirectory(title="Ubicación a guardar respaldos", mustexist=False)
+        d = filedialog.askdirectory(title="Carpeta del programa", mustexist=False)
         if d:
             self.vbk.set(os.path.normpath(d)); self.guardar_carpeta_bk()
 
     def guardar_carpeta_bk(self):
         carpeta = self.vbk.get().strip()
+        if not carpeta:
+            messagebox.showwarning("Carpeta", "Escriba o elija una carpeta."); self.vbk.set(self.db.loc); return
         if carpeta:
             try:
                 os.makedirs(carpeta, exist_ok=True)   # si no existe, se crea
@@ -1388,13 +1415,18 @@ class App:
             except OSError as e:
                 messagebox.showwarning("Respaldos", f"No se puede usar esa carpeta:\n{carpeta}\n\n{e}"); return
             carpeta = os.path.normpath(carpeta); self.vbk.set(carpeta)
-        self.db.set_cfg("carpeta_respaldos", carpeta)
+        try:
+            nueva = self.db.cambiar_ubicacion(carpeta)
+        except OSError as e:
+            messagebox.showwarning("Respaldos", f"No se pudo mover a esa carpeta:\n{e}"); return
+        self.vbk.set(nueva)
         self.lbl_r.config(text=self.texto_respaldo())
-        messagebox.showinfo("Respaldos", f"Los respaldos se guardarán en:\n{self.db.backup_dir()}")
+        messagebox.showinfo("Carpeta", f"Todo se guarda ahora en:\n{nueva}")
 
     def texto_respaldo(self):
-        return (f"Datos: {self.db.dir}\nRespaldos: {self.db.backup_dir()}\n"
-                "Al cerrar el programa se hace un respaldo automático en esa carpeta.\n"
+        return (f"Carpeta: {self.db.loc}\n"
+                "Dentro: datos.db y las carpetas " + ", ".join(SUB.values()) + ".\n"
+                "Al cerrar el programa se hace un respaldo automático en la carpeta Respaldos.\n"
                 "Al importar un respaldo de Monica se actualizan sus datos; lo que hizo en este programa se conserva.")
 
     def importar(self, zip_):
@@ -1476,7 +1508,7 @@ def main():
     except Exception:
         err = traceback.format_exc()
         try:
-            with open(os.path.join(os.path.expanduser("~"), "Documents", "FacturacionCanopolis", "error.log"), "a", encoding="utf-8") as f:
+            with open(os.path.join(leer_ubicacion() or os.environ.get("TEMP", os.path.expanduser("~")), "error.log"), "a", encoding="utf-8") as f:
                 f.write(f"\n--- {datetime.datetime.now()} ---\n{err}")
         except Exception:
             pass

@@ -1,23 +1,119 @@
 """Base de datos local (SQLite) y logica del negocio."""
 import sqlite3, os, datetime, shutil, glob, sys
 
-APP_NAME = "FacturacionCanopolis"
+APP_NAME = "Facturacion Canopolis"
+APP_VIEJO = "FacturacionCanopolis"
+CARPETA_RESPALDO = "Respaldo Facturacion Canopolis"   # nombre usado por versiones anteriores
 
-CARPETA_RESPALDO = "Respaldo Facturacion Canopolis"
+# Subcarpetas dentro de la carpeta que elige el usuario
+SUB = {"F": "Facturas", "Q": "Cotizaciones", "G": "Conduces", "O": "Ordenes de compra",
+       "NC": "Notas de credito", "ND": "Notas de debito", "R": "Reportes", "B": "Respaldos"}
+PREF = {"fa": "F", "es": "Q", "guia": "G", "orden": "O", "nc": "NC", "nd": "ND"}
 
-def data_dir():
-    base = os.path.join(os.path.expanduser("~"), "Documents", APP_NAME)
-    os.makedirs(base, exist_ok=True)
-    vieja = os.path.join(base, "respaldos")
-    nueva = os.path.join(base, CARPETA_RESPALDO)
-    if os.path.isdir(vieja) and not os.path.exists(nueva):
+def _puntero():
+    """Solo anota que carpeta eligio el usuario (en el registro de Windows, no crea carpetas)."""
+    return os.path.join(os.path.expanduser("~"), ".facturacion_canopolis")
+
+_REG = r"Software\Canopolis\Facturacion"
+
+def leer_ubicacion():
+    if sys.platform.startswith("win"):
         try:
-            os.rename(vieja, nueva)   # la carpeta de respaldos cambia de nombre; se conservan los respaldos
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REG) as k:
+                return (winreg.QueryValueEx(k, "Carpeta")[0] or "").strip() or None
+        except OSError:
+            return None
+    try:
+        with open(_puntero(), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+def guardar_ubicacion(loc):
+    if sys.platform.startswith("win"):
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _REG) as k:
+            winreg.SetValueEx(k, "Carpeta", 0, winreg.REG_SZ, loc)
+        return
+    with open(_puntero(), "w", encoding="utf-8") as f:
+        f.write(loc)
+
+def crear_subcarpetas(loc):
+    for s in SUB.values():
+        os.makedirs(os.path.join(loc, s), exist_ok=True)
+
+def _mv(f, carpeta):
+    os.makedirs(carpeta, exist_ok=True)
+    dst = os.path.join(carpeta, os.path.basename(f))
+    if not os.path.exists(dst):
+        shutil.move(f, dst)
+
+def _mover_pdf(f, loc):
+    nombre = os.path.basename(f)
+    k = PREF.get(nombre.split("_", 1)[0], "F")
+    _mv(f, os.path.join(loc, SUB[k]))
+
+def _mover_contenido(origen, loc):
+    """Pasa datos.db, respaldos y PDF de 'origen' (estructura vieja o nueva) a 'loc'."""
+    crear_subcarpetas(loc)
+    db = os.path.join(origen, "datos.db")
+    if os.path.exists(db):
+        _mv(db, loc)
+    for b in (origen, os.path.join(origen, SUB["B"])):
+        for f in glob.glob(os.path.join(b, "respaldo_*.db")):
+            _mv(f, os.path.join(loc, SUB["B"]))
+    vieja = os.path.join(origen, "facturas_pdf")
+    if os.path.isdir(vieja):
+        for f in glob.glob(os.path.join(vieja, "*")):
+            _mover_pdf(f, loc)
+    for k, s in SUB.items():
+        if k == "B": continue
+        o = os.path.join(origen, s)
+        if os.path.isdir(o):
+            for f in glob.glob(os.path.join(o, "*")):
+                _mv(f, os.path.join(loc, s))
+    o = os.path.join(origen, "reportes")
+    if os.path.isdir(o):
+        for f in glob.glob(os.path.join(o, "*")):
+            _mv(f, os.path.join(loc, SUB["R"]))
+
+def _borrar_si_vacia(carpeta):
+    for raiz, dirs, files in os.walk(carpeta, topdown=False):
+        for f in files:
+            if f in ("ubicacion.txt", "error.log", ".prueba_escritura"):
+                try: os.remove(os.path.join(raiz, f))
+                except OSError: pass
+        try: os.rmdir(raiz)
+        except OSError: pass
+
+def carpetas_viejas():
+    docs = os.path.join(os.path.expanduser("~"), "Documents")
+    return [p for p in (os.path.join(docs, APP_NAME), os.path.join(docs, APP_VIEJO)) if os.path.isdir(p)]
+
+def migrar_viejas(loc):
+    """Todo lo de versiones anteriores (en Documentos) pasa a la carpeta elegida; lo viejo se borra si queda vacio."""
+    for base in carpetas_viejas():
+        fuentes = [os.path.join(base, CARPETA_RESPALDO), os.path.join(base, "respaldos"), base]
+        try:
+            with open(os.path.join(base, "ubicacion.txt"), encoding="utf-8") as f:
+                p = f.read().strip()
+            if p: fuentes.insert(0, p)
         except OSError:
             pass
-    for sub in (CARPETA_RESPALDO, "facturas_pdf"):
-        os.makedirs(os.path.join(base, sub), exist_ok=True)
-    return base
+        for cand in (os.path.join(base, "datos.db"), os.path.join(base, CARPETA_RESPALDO, "datos.db")):
+            if not os.path.exists(cand): continue
+            try:
+                c = sqlite3.connect(cand); r = c.execute("SELECT v FROM config WHERE k='carpeta_respaldos'").fetchone(); c.close()
+                if r and (r[0] or "").strip(): fuentes.append(r[0].strip())
+            except sqlite3.Error:
+                pass
+        for o in fuentes:
+            if os.path.isdir(o) and os.path.normcase(os.path.normpath(o)) != os.path.normcase(os.path.normpath(loc)):
+                _mover_contenido(o, loc)
+                if not os.path.normcase(o).startswith(os.path.normcase(base)):
+                    pass   # carpeta elegida antes por el usuario: no se borra
+        _borrar_si_vacia(base)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS config(k TEXT PRIMARY KEY, v TEXT);
@@ -113,9 +209,47 @@ def parse_date(s):
 
 
 class DB:
-    def __init__(self, path=None):
-        self.dir = data_dir() if path is None else os.path.dirname(path)
-        self.path = path or os.path.join(self.dir, "datos.db")
+    def __init__(self, path=None, loc=None):
+        if path is None:
+            self.loc = loc or leer_ubicacion()
+            if not self.loc:
+                raise RuntimeError("No se ha elegido la carpeta de datos.")
+        else:
+            self.loc = os.path.dirname(path)
+        os.makedirs(self.loc, exist_ok=True)
+        if path is None: crear_subcarpetas(self.loc)
+        self.dir = self.loc
+        self.path = path or os.path.join(self.loc, "datos.db")
+        self._abrir()
+
+    def cambiar_ubicacion(self, nueva):
+        """Mueve todo (datos, documentos y respaldos) a la carpeta nueva (se crea si no existe)."""
+        nueva = os.path.normpath(nueva)
+        if os.path.normcase(nueva) == os.path.normcase(os.path.normpath(self.loc)):
+            return nueva
+        if os.path.normcase(nueva).startswith(os.path.normcase(os.path.normpath(self.loc)) + os.sep):
+            raise OSError("La carpeta nueva no puede estar dentro de la actual.")
+        os.makedirs(nueva, exist_ok=True)
+        if os.path.exists(os.path.join(nueva, "datos.db")):
+            raise OSError("Esa carpeta ya tiene un archivo datos.db. Elija otra carpeta.")
+        self.con.commit(); self.con.close()
+        vieja = self.loc
+        try:
+            _mover_contenido(vieja, nueva)
+        finally:
+            if os.path.exists(os.path.join(nueva, "datos.db")):
+                self.loc = self.dir = nueva; self.path = os.path.join(nueva, "datos.db")
+                guardar_ubicacion(nueva)
+                for s in SUB.values():
+                    try: os.rmdir(os.path.join(vieja, s))
+                    except OSError: pass
+            self._abrir()
+        return self.loc
+
+    def carpeta(self, k):
+        c = os.path.join(self.loc, SUB[k]); os.makedirs(c, exist_ok=True); return c
+
+    def _abrir(self):
         self.con = sqlite3.connect(self.path)
         self.con.row_factory = sqlite3.Row
         self.con.executescript(SCHEMA)
@@ -636,9 +770,7 @@ class DB:
     # ---------- respaldo ----------
     def backup_dir(self):
         """Carpeta de respaldos elegida en Configuracion (se crea si no existe) o la de siempre."""
-        d = (self.cfg("carpeta_respaldos") or "").strip() or os.path.join(self.dir, CARPETA_RESPALDO)
-        os.makedirs(d, exist_ok=True)
-        return d
+        return self.carpeta("B")
 
     def backup(self, motivo="cierre"):
         self.con.commit()
