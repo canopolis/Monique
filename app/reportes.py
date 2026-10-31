@@ -39,6 +39,13 @@ class P:
 
 # ------------------------------------------------------------------ estado de cuenta
 def estado_cuenta(db, clientes, desde, hasta, ruta, ap=False):
+    """Clientes: formato nuevo (con detalle de lo pendiente y copia de las facturas). Proveedores: formato Monica."""
+    if not ap:
+        return estado_cuenta_cliente(db, clientes, desde, hasta, ruta)
+    return _estado_cuenta_monica(db, clientes, desde, hasta, ruta, ap)
+
+
+def _estado_cuenta_monica(db, clientes, desde, hasta, ruta, ap=False):
     """clientes: lista de codigos. desde/hasta: date."""
     c = canvas.Canvas(ruta, pagesize=letter); c.setTitle("Estado de cuenta"); c.setLineWidth(0.7)
     pag = [0]
@@ -109,6 +116,144 @@ def estado_cuenta(db, clientes, desde, hasta, ruta, ap=False):
     if not hechos:
         c.setFont(H_, 10); c.drawString(40, 700, "Sin clientes."); c.showPage()
     c.save()
+    return ruta
+
+
+def _tipo_fact(r):
+    if not r or not r["ncf"]: return "Factura"
+    return {1: "Fact. Créd. Fiscal", 2: "Fact. Consumo", 14: "Fact. Reg. Especial", 15: "Fact. Gubernamental"}.get(r["tipo"], "Factura")
+
+
+def _envolver(texto, font, size, ancho):
+    out, linea = [], ""
+    for w in texto.split():
+        prueba = (linea + " " + w).strip()
+        if stringWidth(prueba, font, size) > ancho and linea:
+            out.append(linea); linea = w
+        else:
+            linea = prueba
+    if linea: out.append(linea)
+    return out
+
+
+def estado_cuenta_cliente(db, clientes, desde, hasta, ruta):
+    """Estado de cuenta del cliente + mensaje de lo pendiente (vigente o vencido) + copia de cada factura pendiente."""
+    import os, tempfile
+    from pdf_factura import generar_factura
+    c = canvas.Canvas(ruta, pagesize=letter); c.setTitle("Estado de cuenta"); c.setLineWidth(0.6)
+    d1, d2 = fmt_date(desde), fmt_date(hasta)
+    emp = db.cfg("emp_nombre") or ""
+    ciudad = (db.cfg("emp_l2") or "").title()
+    rnc = db.cfg("emp_l5") or ""
+    adjuntar = []          # (posicion en paginas, [facturas]) para insertar las copias despues de cada estado
+    paginas = [0]
+    X = dict(fecha=30, nro=118, tipo=126, ref=222, venc=300, deb=420, cre=500, bal=582)
+    hechos = 0
+    for code in clientes:
+        cl = db.one("SELECT * FROM clients WHERE code=?", (code,))
+        if not cl: continue
+        hechos += 1
+        ents = db.ledger_entries(code)
+        previo = sum(e["monto"] for e in ents if (e["date"] or "") < d1)
+        rango = [e for e in ents if d1 <= (e["date"] or "") <= d2]
+        invs = {r["nro"]: r for r in db.q("SELECT * FROM invoices WHERE client=?", (code,))}
+        pag = [0]
+
+        def cabecera():
+            pag[0] += 1
+            p = P(c)
+            p.t(30, 30, emp.upper(), HB, 16)
+            p.t(582, 32, f"Pág. {pag[0]}", H_, 8, "r")
+            p.t(30, 50, f"RNC {rnc} · {ciudad}".strip(" ·"), H_, 8)
+            p.t(306, 78, "E S T A D O    D E    C U E N T A", HB, 11, "c")
+            p.t(30, 104, f"Cliente: {code} – {cl['name'] or ''}", HB, 9)
+            y = 116
+            for a in (cl["addr1"], cl["addr2"]):
+                if a: p.t(30, y, a, H_, 8); y += 10
+            p.t(30, 146, f"Desde: {dmy(desde)}     Hasta: {dmy(hasta)}     Moneda: Pesos", H_, 8)
+            p.line(30, 162, 582, 162)
+            for k, t_, al in (("fecha", "Fecha", "l"), ("nro", "Nro. Fact", "r"), ("tipo", "Tipo", "l"),
+                              ("ref", "Referencia", "l"), ("venc", "Vencmto.", "l"), ("deb", "Débitos", "r"),
+                              ("cre", "Créditos", "r"), ("bal", "Balance", "r")):
+                p.t(X[k], 166, t_, HB, 8, al)
+            p.line(30, 178, 582, 178)
+            return p
+
+        p = cabecera(); top = 184
+        bal = previo; deb = cre = 0.0
+        if abs(previo) > 0.005:
+            p.t(X["fecha"], top, dmy(desde - datetime.timedelta(days=1)), H_, 8)
+            p.t(X["ref"], top, "Balance previo", H_, 8)
+            p.t(X["bal"], top, n2(previo), H_, 8, "r"); top += 12
+        for e in rango:
+            if top > 720:
+                c.showPage(); paginas[0] += 1; p = cabecera(); top = 184
+            bal += e["monto"]
+            es_f = e["nro"] is not None and e["tipo"] == "Fact."
+            p.t(X["fecha"], top, dmy(e["date"]), H_, 8)
+            if e["nro"]: p.t(X["nro"], top, e["nro"], H_, 8, "r")
+            p.t(X["tipo"], top, _tipo_fact(invs.get(e["nro"])) if es_f else e["tipo"], H_, 8)
+            p.t(X["ref"], top, str(e["nro"]) if es_f else fit(e["descr"] or "", H_, 8, 75), H_, 8)
+            p.t(X["venc"], top, dmy(e["due"]), H_, 8)
+            if e["monto"] >= 0:
+                p.t(X["deb"], top, n2(e["monto"]), H_, 8, "r"); p.t(X["cre"], top, n2(0), H_, 8, "r"); deb += e["monto"]
+            else:
+                p.t(X["deb"], top, n2(0), H_, 8, "r"); p.t(X["cre"], top, n2(-e["monto"]), H_, 8, "r"); cre += -e["monto"]
+            p.t(X["bal"], top, n2(bal), H_, 8, "r")
+            top += 12
+        if not rango and abs(previo) <= 0.005:
+            p.t(X["ref"], top, "Sin movimientos en este período.", H_, 8); top += 12
+        top += 2; p.line(30, top, 582, top); top += 5
+        p.t(X["fecha"], top, "TOTAL Pesos", HB, 8)
+        p.t(X["deb"], top, n2(deb + max(previo, 0)), HB, 8, "r"); p.t(X["cre"], top, n2(cre - min(previo, 0)), HB, 8, "r")
+        p.t(X["bal"], top, n2(bal), HB, 8, "r")
+        top += 26
+
+        pend = [(r, s) for r, s in db.open_invoices(code) if (r["date"] or "") <= d2]
+        total_p = round(sum(s for _, s in pend), 2)
+        if pend:
+            msg = (f"Al {dmy(hasta)}, su cuenta presenta un balance pendiente de RD${n2(total_p)}, "
+                   f"compuesto por las siguientes facturas:")
+        else:
+            msg = f"Al {dmy(hasta)}, su cuenta no presenta balance pendiente. No tiene facturas por pagar."
+        for ln in _envolver(msg, H_, 9, 550):
+            if top > 740: c.showPage(); paginas[0] += 1; p = cabecera(); top = 184
+            p.t(30, top, ln, H_, 9); top += 13
+        top += 2
+        for r, s in pend:
+            if top > 740: c.showPage(); paginas[0] += 1; p = cabecera(); top = 184
+            due = parse_date(r["due"]) if r["due"] else None
+            if due and due < hasta:
+                est = f"vencida el {dmy(due)}"
+            elif due:
+                est = f"caduca el {dmy(due)}"
+            else:
+                est = "sin fecha de vencimiento"
+            p.t(40, top, f"•  Factura No. {r['nro']}: RD${n2(s)} — {est}", H_, 9); top += 13
+        c.showPage(); paginas[0] += 1
+        adjuntar.append((paginas[0], [r["nro"] for r, _ in pend]))
+    if not hechos:
+        c.setFont(H_, 10); c.drawString(40, 700, "Sin clientes."); c.showPage()
+    c.save()
+    if not any(n for _, n in adjuntar):
+        return ruta
+    # copia de cada factura pendiente justo despues de su estado de cuenta
+    from pypdf import PdfReader, PdfWriter
+    tmpd = tempfile.mkdtemp()
+    base = PdfReader(ruta); w = PdfWriter(); i = 0
+    for hasta_pag, nros in adjuntar:
+        while i < hasta_pag:
+            w.add_page(base.pages[i]); i += 1
+        for n in nros:
+            f = os.path.join(tmpd, f"fa_{n}.pdf")
+            try:
+                generar_factura(db, n, f)
+                for pg in PdfReader(f).pages: w.add_page(pg)
+            except Exception:
+                pass
+    while i < len(base.pages):
+        w.add_page(base.pages[i]); i += 1
+    with open(ruta, "wb") as fh: w.write(fh)
     return ruta
 
 
