@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.34"
+VERSION = "1.35"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -1338,8 +1338,6 @@ class App:
         self.sa = tk.StringVar(value=dmy(hoy))
         ttk.Label(r2, text="Saldos vencidos  Facturas desde").pack(side="left", padx=3)
         fecha_entry(r2, self.sd, 11).pack(side="left")
-        ttk.Label(r2, text="hasta").pack(side="left", padx=3)
-        fecha_entry(r2, self.sh, 11).pack(side="left")
         ttk.Label(r2, text="al").pack(side="left", padx=3)
         fecha_entry(r2, self.sa, 11).pack(side="left")
         ttk.Button(r2, text="Saldos vencidos (PDF)", command=self.pdf_saldos).pack(side="left", padx=6)
@@ -1422,7 +1420,8 @@ class App:
 
     def pdf_saldos(self):
         try:
-            d1, d2, al = read_dmy(self.sd.get()), read_dmy(self.sh.get()), read_dmy(self.sa.get())
+            d1, al = read_dmy(self.sd.get()), read_dmy(self.sa.get())
+            d2 = al   # "hasta" es la misma fecha "al"
         except ValueError as e:
             messagebox.showwarning("Fechas", str(e)); return
         ruta = self.rep_path("Saldos_vencidos")
