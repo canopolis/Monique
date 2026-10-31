@@ -3,12 +3,12 @@ import os, sys, datetime, traceback, subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from db import DB, leer_ubicacion, guardar_ubicacion, migrar_viejas, crear_subcarpetas, SUB, TIPOS, TIPOS_FACTURA, fmt_date, parse_date
+from db import DB, APP_NAME, con_carpeta_app, leer_ubicacion, guardar_ubicacion, migrar_viejas, crear_subcarpetas, SUB, TIPOS, TIPOS_FACTURA, fmt_date, parse_date
 from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.18"
+VERSION = "1.19"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -691,8 +691,8 @@ def elegir_carpeta_inicial(root):
     """La carpeta la escoge el usuario. Se pregunta la primera vez o si ya no se encuentra."""
     loc = leer_ubicacion()
     if loc and os.path.isdir(loc):
-        return loc
-    msg = ("Elija la carpeta donde se guardará todo:\nlos datos, las facturas, conduces, cotizaciones,\n"
+        return con_carpeta_app(loc)
+    msg = (f"Elija dónde crear la carpeta '{APP_NAME}'.\nDentro de ella se guardará todo:\nlos datos, las facturas, conduces, cotizaciones,\n"
            "órdenes, notas, reportes y respaldos.") if not loc else (
            f"No se encuentra la carpeta:\n{loc}\n\nElija dónde está, o una carpeta nueva.")
     while True:
@@ -703,6 +703,8 @@ def elegir_carpeta_inicial(root):
                 root.destroy(); sys.exit(0)
             continue
         d = os.path.normpath(d)
+        if os.path.basename(d).lower() != APP_NAME.lower():
+            d = os.path.join(d, APP_NAME)
         try:
             os.makedirs(d, exist_ok=True)
             p = os.path.join(d, ".prueba_escritura"); open(p, "w").close(); os.remove(p)
@@ -1394,12 +1396,12 @@ class App:
         ttk.Entry(uf, textvariable=self.vbk, width=70).pack(side="left", padx=6, pady=6)
         ttk.Button(uf, text="Elegir carpeta...", command=self.elegir_carpeta_bk).pack(side="left", padx=3)
         ttk.Button(uf, text="Guardar ubicación", command=self.guardar_carpeta_bk).pack(side="left", padx=3)
-        ttk.Label(box, text="(si la carpeta no existe, se crea; todo se mueve ahí)").pack(anchor="w")
+        ttk.Label(box, text=f"(se usa una carpeta llamada '{APP_NAME}' en el lugar que elija; si no existe, se crea y todo se mueve ahí)").pack(anchor="w")
         self.lbl_r = ttk.Label(box, text="", justify="left"); self.lbl_r.pack(anchor="w", pady=12)
         self.lbl_r.config(text=self.texto_respaldo())
 
     def elegir_carpeta_bk(self):
-        d = filedialog.askdirectory(title="Carpeta del programa", mustexist=False)
+        d = filedialog.askdirectory(title=f"Dónde crear la carpeta {APP_NAME}", mustexist=False)
         if d:
             self.vbk.set(os.path.normpath(d)); self.guardar_carpeta_bk()
 
@@ -1414,7 +1416,10 @@ class App:
                 open(prueba, "w").close(); os.remove(prueba)
             except OSError as e:
                 messagebox.showwarning("Respaldos", f"No se puede usar esa carpeta:\n{carpeta}\n\n{e}"); return
-            carpeta = os.path.normpath(carpeta); self.vbk.set(carpeta)
+            carpeta = os.path.normpath(carpeta)
+            if os.path.basename(carpeta).lower() != APP_NAME.lower():
+                carpeta = os.path.join(carpeta, APP_NAME)
+            self.vbk.set(carpeta)
         try:
             nueva = self.db.cambiar_ubicacion(carpeta)
         except OSError as e:

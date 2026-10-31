@@ -87,6 +87,19 @@ def _borrar_si_vacia(carpeta):
         try: os.rmdir(raiz)
         except OSError: pass
 
+def con_carpeta_app(loc):
+    """Todo vive dentro de una carpeta llamada APP_NAME. Si la anotada no se llama asi, se pasa todo adentro."""
+    loc = os.path.normpath(loc)
+    if os.path.basename(loc).lower() == APP_NAME.lower():
+        return loc
+    nueva = os.path.join(loc, APP_NAME)
+    _mover_contenido(loc, nueva)
+    for s in SUB.values():
+        try: os.rmdir(os.path.join(loc, s))
+        except OSError: pass
+    guardar_ubicacion(nueva)
+    return nueva
+
 def carpetas_viejas():
     docs = os.path.join(os.path.expanduser("~"), "Documents")
     return [p for p in (os.path.join(docs, APP_NAME), os.path.join(docs, APP_VIEJO)) if os.path.isdir(p)]
