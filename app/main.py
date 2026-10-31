@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.27"
+VERSION = "1.32"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -844,7 +844,7 @@ class App:
         b = ttk.Frame(fr); b.pack(side="bottom", fill="x", pady=4)
         sb.pack(side="right", fill="y"); self.tv_v.pack(fill="both", expand=True)
         self.tv_v.bind("<Double-1>", lambda e: self.ver_pdf())
-        for t, cmd in (("Nueva factura", self.nueva), ("Editar", self.editar), ("Ver / descargar PDF", self.ver_pdf),
+        for t, cmd in (("Nueva factura", self.nueva), ("Facturación rápida", self.facturacion_rapida), ("Editar", self.editar), ("Ver / descargar PDF", self.ver_pdf),
                        ("Registrar pago", self.pagar), ("Marcar pagada", self.marcar_pagada),
                        ("Marcar NO pagada (corregir)", self.marcar_no_pagada),
                        ("Asignar NCF", self.asignar_ncf), ("Nota de crédito", lambda: self.nota("NC")),
@@ -889,6 +889,105 @@ class App:
     def nueva(self):
         e = InvoiceEditor(self); self.root.wait_window(e)
         if e.saved: self.refresh_all()
+
+    def facturacion_rapida(self):
+        """Crea la factura a partir del PDF de Factura Dominicana (GTI)."""
+        from gti import leer_gti
+        top = tk.Toplevel(self.root); top.title("Facturación rápida"); top.transient(self.root); top.grab_set()
+        top.resizable(False, False)
+        ruta = tk.StringVar()
+        ttk.Label(top, text="Por favor subir factura Dominicana GTI", font=("Segoe UI", 11, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(12, 8))
+        ttk.Entry(top, textvariable=ruta, width=60).grid(row=1, column=0, columnspan=2, padx=(12, 4))
+        ttk.Button(top, text="Aquí", command=lambda: ruta.set(filedialog.askopenfilename(
+            parent=top, title="Factura Dominicana GTI", filetypes=[("PDF", "*.pdf")]) or ruta.get())).grid(row=1, column=2, padx=(0, 12))
+        ok = {}
+        bf = ttk.Frame(top); bf.grid(row=2, column=0, columnspan=3, pady=12)
+        ttk.Button(bf, text="OK", command=lambda: (ok.setdefault("r", ruta.get().strip()), top.destroy())).pack(side="left", padx=6)
+        ttk.Button(bf, text="Cancelar", command=top.destroy).pack(side="left", padx=6)
+        top.wait_window()
+        path = ok.get("r")
+        if not path: return
+        try:
+            g = leer_gti(path)
+        except Exception as e:
+            messagebox.showerror("Facturación rápida", f"No se pudo leer el PDF:\n{e}"); return
+        errores = []
+        if not g["ncf"]: errores.append("No se encontró el e-NCF en el PDF.")
+        elif g["tipo"] not in TIPOS_FACTURA or not g["tipo"]:
+            errores.append(f"El comprobante {g['ncf'][:3]} no es una factura que maneje el programa "
+                           "(se aceptan E31, E32, E44, E45 y E46). Las notas de crédito y débito se registran a mano.")
+        if not g["items"]: errores.append("No se encontraron productos en el PDF.")
+        # cliente: por RNC; si no trae RNC (consumidor final), por nombre
+        cl = None
+        if g["rnc"]:
+            mismos = [c for c in self.db.q("SELECT * FROM clients WHERE COALESCE(ctype,'C')='C' ORDER BY name, code")
+                      if "".join(ch for ch in (c["rnc"] or "") if ch.isdigit()) == g["rnc"]]
+            if len(mismos) == 1:
+                cl = mismos[0]
+            elif len(mismos) > 1:
+                # mismo RNC con varias sucursales: el usuario elige a cual corresponde
+                rows = [(c["code"], c["name"], " ".join(x for x in (c["addr1"], c["addr2"], c["addr3"]) if x)) for c in mismos]
+                p = Picker(self.root, f"RNC {g['rnc']}: ¿a cuál sucursal corresponde esta factura?",
+                           ("Código", "Cliente", "Dirección"), rows, [90, 280, 360])
+                if not p.result: return
+                cl = self.db.one("SELECT * FROM clients WHERE code=?", (p.result[0],))
+            else:
+                errores.append(f"No hay cliente con RNC {g['rnc']} ({g['cliente_nombre']}).")
+        else:
+            # sin RNC: cliente independiente (consumidor final)
+            indep = self.db.one("SELECT * FROM clients WHERE code='CLIENTE'") or \
+                self.db.one("SELECT * FROM clients WHERE upper(name) LIKE '%INDEPENDIENTE%' ORDER BY code")
+            nom = g["cliente_nombre"] or "consumidor final"
+            if messagebox.askyesno("Facturación rápida", f"La factura es de un cliente independiente ({nom}).\n\n"
+                                   "¿Asignar esta factura a otro cliente?"):
+                rows = [(c["code"], c["name"]) for c in self.db.q("SELECT code,name FROM clients WHERE COALESCE(ctype,'C')='C' ORDER BY name")]
+                p = Picker(self.root, "Elija el cliente para esta factura", ("Código", "Cliente"), rows, [120, 560])
+                if not p.result: return
+                cl = self.db.one("SELECT * FROM clients WHERE code=?", (p.result[0],))
+            else:
+                cl = indep
+                if cl is None: errores.append("No existe el cliente independiente en el programa.")
+        lines = []
+        for it in g["items"]:
+            pr = self.db.one("SELECT * FROM products WHERE code=?", (it["code"],))
+            if not pr:
+                errores.append(f"No existe el producto {it['code']} ({it['descr']})."); continue
+            precio = round(it["total"] / it["qty"], 4) if it["descuento"] and it["qty"] else it["price"]
+            lines.append(dict(code=pr["code"], descr=pr["descr"], qty=it["qty"], price=precio, cost=pr["cost"] or 0,
+                              itbis=(pr["itbis"] or 0) if g["itbis"] else 0))
+        if g["ncf"]:
+            usado = self.db.ncf_usado(g["ncf"])
+            if usado: errores.append(f"El e-NCF {g['ncf']} ya está en la factura {usado}.")
+        if g["emisor_rnc"] and self.db.cfg("emp_l5") and g["emisor_rnc"] != "".join(ch for ch in self.db.cfg("emp_l5") if ch.isdigit()):
+            errores.append(f"La factura es de otro emisor (RNC {g['emisor_rnc']}).")
+        if errores:
+            messagebox.showwarning("Facturación rápida", "No se creó la factura:\n\n" + "\n".join(errores)); return
+        sub = sum(l["qty"] * l["price"] for l in lines)
+        itb = sum(l["qty"] * l["price"] * l["itbis"] / 100 for l in lines)
+        if abs(sub + itb - g["total"]) > 0.05:
+            if not messagebox.askyesno("Facturación rápida", f"El total de la GTI es {m2(g['total'])} y la suma de los productos da "
+                                       f"{m2(sub + itb)}.\n¿Crear la factura igual?"):
+                return
+        nro = self.db.next_invoice_no()   # siempre el numero que corresponde en el programa
+        b = self.db.client_print_block(cl["code"])
+        dias = (g["vence"] - g["fecha"]).days if g["vence"] and g["fecha"] else 0
+        terms = "Efectivo" if dias <= 0 else next((t for t, n in DIAS.items() if n == dias and t != "Credito"), "Credito")
+        h = dict(nro=nro, date=fmt_date(g["fecha"] or datetime.date.today()), due=fmt_date(g["vence"] or g["fecha"]),
+                 client=cl["code"], name=b["name"], dir1=b["dir1"], dir2=b["dir2"], dir3=b["dir3"], rnc=b["rnc"],
+                 terms=terms, ship_via=self.db.cfg("envio"), seller="", ref="", comment1="",
+                 comment2=self.db.cfg("coment2"), comment3=self.db.cfg("coment3"),
+                 ncf=self.db.ncf_desde_gti(g["ncf"]), tipo=g["tipo"], discount=0,
+                 ecf_cod=g["codigo_seguridad"], ecf_firma=g["fecha_firma"], ecf_qr=g["qr"])
+        try:
+            self.db.save_invoice(h, lines, [])
+            ruta = self.pdf_path(nro); generar_factura(self.db, nro, ruta)
+        except Exception as e:
+            messagebox.showerror("Facturación rápida", f"No se pudo crear la factura:\n{e}"); return
+        self.refresh_all()
+        messagebox.showinfo("Facturación rápida", f"Factura {nro} creada para {b['name']}\n"
+                            f"e-NCF {g['ncf']}   Total {m2(sub + itb)}\nSe descontó el inventario.")
+        open_file(ruta)
 
     def editar(self):
         n = self.sel_v()
@@ -949,11 +1048,11 @@ class App:
         inv = self.db.one("SELECT * FROM invoices WHERE nro=?", (n,))
         if inv["ncf"]:
             messagebox.showinfo("NCF", f"La factura {n} ya tiene NCF {inv['ncf']}."); return
-        opciones = [tipo_nombre(t) for t in (1, 2, 14, 15)]
+        opciones = [tipo_nombre(t) for t in (1, 2, 14, 15, 16)]
         r = form_dialog(self.root, f"Asignar NCF a la factura {n}", [("tipo", "Tipo de comprobante", "combo:" + "|".join(opciones))],
                         {"tipo": tipo_nombre(inv["tipo"] or 1)})
         if not r: return
-        tipo = next((t for t in (1, 2, 14, 15) if tipo_nombre(t) == r["tipo"]), 1)
+        tipo = next((t for t in (1, 2, 14, 15, 16) if tipo_nombre(t) == r["tipo"]), 1)
         ncf = self.db.assign_ncf(n, tipo)
         if not ncf:
             messagebox.showwarning("NCF", "No hay comprobantes disponibles de ese tipo. Agregue la secuencia en 'Comprobantes'.")
@@ -1407,7 +1506,7 @@ class App:
     def edit_seq(self, sid, need=False):
         if need and not sid:
             messagebox.showinfo("Comprobantes", "Seleccione una secuencia."); return
-        tipos = [tipo_nombre(t) for t in (1, 2, 14, 15, 3, 4)]
+        tipos = [tipo_nombre(t) for t in (1, 2, 14, 15, 16, 3, 4)]
         vals = dict(self.db.one("SELECT * FROM sequences WHERE id=?", (sid,))) if sid else {"fixed": "......E3100", "next_num": 1, "tipo": 1}
         vals["tipo_n"] = tipo_nombre(vals["tipo"]); vals["auth"] = dmy(vals.get("auth_date"))
         r = form_dialog(self.root, "Secuencia de comprobantes", [
@@ -1416,7 +1515,7 @@ class App:
             ("auth", "Fecha autorización (DD/MM/AAAA)", "date")], vals)
         if not r: return
         try:
-            tipo = next(t for t in (1, 2, 14, 15, 3, 4) if tipo_nombre(t) == r["tipo_n"])
+            tipo = next(t for t in (1, 2, 14, 15, 16, 3, 4) if tipo_nombre(t) == r["tipo_n"])
             nx = int(num(r["next_num"])); lm = int(num(r["limit_num"]))
             au = fmt_date(read_dmy(r["auth"])) if r["auth"] else ""
         except (ValueError, StopIteration) as e:

@@ -203,8 +203,9 @@ TIPOS = {
     4: ("Nota de débito", "NOTA DE DEBITO"),
     14: ("Factura. Regímenes especiales", "FACTURA. REGIMENES ESPECIALES"),
     15: ("Factura. Gubernamental", "FACTURA. GUBERNAMENTAL"),
+    16: ("Factura. Exportaciones", "FACTURA. EXPORTACIONES"),
 }
-TIPOS_FACTURA = [1, 2, 14, 15, 0]
+TIPOS_FACTURA = [1, 2, 14, 15, 16, 0]
 
 DEFAULT_CONFIG = {
     "emp_nombre": "Canopolis",
@@ -296,6 +297,9 @@ class DB:
         if "kind" not in cols("orig_lines"):
             self.con.execute("ALTER TABLE orig_lines ADD COLUMN kind TEXT DEFAULT 'F'")
         self.con.execute("UPDATE stock_moves SET kind='A' WHERE nro=0 AND kind='F'")
+        for col, typ in (("ecf_cod", "TEXT"), ("ecf_firma", "TEXT"), ("ecf_qr", "BLOB")):
+            if col not in cols("invoices"):
+                self.con.execute(f"ALTER TABLE invoices ADD COLUMN {col} {typ}")
         if "unpaid" not in cols("invoices"):
             self.con.execute("ALTER TABLE invoices ADD COLUMN unpaid INTEGER DEFAULT 0")
         if "ncf" not in cols("odocs"):
@@ -430,8 +434,10 @@ class DB:
     def low_sequences(self):
         lim = int(self.cfg("aviso_pocos") or 10)
         out = []
-        for t in (1, 2, 14, 15):
+        for t in (1, 2, 14, 15, 16):
             s = self.active_seq(t)
+            if t == 16 and not self.one("SELECT 1 FROM sequences WHERE tipo=16"):
+                continue   # exportaciones: solo se avisa si se cargo su secuencia
             if s is None:
                 out.append(f"{TIPOS[t][0]}: SIN comprobantes disponibles")
             elif self.seq_remaining(s) <= lim:
@@ -449,7 +455,7 @@ class DB:
         if best:
             return best[1]
         clean = ncf.lstrip(".*0")
-        for pref, t in (("E31", 1), ("E32", 2), ("E33", 4), ("E34", 3), ("E44", 14), ("E45", 15),
+        for pref, t in (("E31", 1), ("E32", 2), ("E33", 4), ("E34", 3), ("E44", 14), ("E45", 15), ("E46", 16),
                         ("B01", 1), ("B02", 2), ("B03", 4), ("B04", 3), ("B14", 14), ("B15", 15)):
             if clean.startswith(pref):
                 return t
@@ -511,9 +517,12 @@ class DB:
                 "subtotal", "itbis", "discount", "total", "saldo_base", "deleted", "origin", "modified"]
         vals = dict(h, subtotal=subtotal, itbis=itbis, total=total, saldo_base=saldo_base,
                     deleted=0, origin=origin, modified=modified)
+        ecf = {k: (h.get(k) if h.get(k) is not None else (old[k] if old else None)) for k in ("ecf_cod", "ecf_firma", "ecf_qr")}
         vals.setdefault("discount", 0)
         self.con.execute(f"INSERT OR REPLACE INTO invoices({','.join(cols)}) VALUES({','.join('?'*len(cols))})",
                          [vals.get(c, "") for c in cols])
+        self.con.execute("UPDATE invoices SET ecf_cod=?, ecf_firma=?, ecf_qr=? WHERE nro=?",
+                         (ecf["ecf_cod"], ecf["ecf_firma"], ecf["ecf_qr"], nro))
         self.con.execute("DELETE FROM lines WHERE nro=?", (nro,))
         for i, l in enumerate(lines, 1):
             self.con.execute("INSERT INTO lines(nro,pos,code,descr,qty,price,cost,itbis) VALUES(?,?,?,?,?,?,?,?)",
@@ -552,6 +561,24 @@ class DB:
         self.con.execute("INSERT INTO payments(nro,date,amount,method,note) VALUES(?,?,?,?,?)",
                          (nro, fmt_date(date or datetime.date.today()), amount, method, note))
         self.con.commit()
+
+    def ncf_desde_gti(self, ncf):
+        """e-NCF de Factura Dominicana (ej. E310000000174) en el formato de las secuencias del programa.
+        Marca ese numero como usado (el proximo de la secuencia queda despues de el)."""
+        pref, num = ncf[:3], int(ncf[3:])
+        for s in self.q("SELECT * FROM sequences ORDER BY active DESC, id DESC"):
+            limpio = (s["fixed"] or "").lstrip(".*")
+            if limpio.startswith(pref) and self.ncf_text(s["fixed"], num).lstrip(".*") == ncf:
+                if int(s["next_num"]) <= num:
+                    self.con.execute("UPDATE sequences SET next_num=? WHERE id=?", (num + 1, s["id"]))
+                return self.ncf_text(s["fixed"], num)
+        return ncf
+
+    def ncf_usado(self, ncf):
+        for r in self.q("SELECT nro, ncf FROM invoices WHERE deleted=0 AND ncf<>''"):
+            if (r["ncf"] or "").lstrip(".*") == ncf:
+                return r["nro"]
+        return None
 
     def assign_ncf(self, nro, tipo):
         ncf = self.take_ncf(tipo)
@@ -776,7 +803,7 @@ class DB:
 
     def invoice_label(self, i):
         lab = {0: "Factura", 1: "Fact. Credito Fiscal", 2: "Fact. Consumidor Final", 14: "Fact. Reg. Especial",
-               15: "Fact. Gubernamental"}.get(i["tipo"] if i["ncf"] else 0, "Factura")
+               15: "Fact. Gubernamental", 16: "Fact. Exportaciones"}.get(i["tipo"] if i["ncf"] else 0, "Factura")
         return f"{lab} {i['nro']}"
 
     def open_invoices(self, client=None):

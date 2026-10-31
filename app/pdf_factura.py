@@ -59,6 +59,24 @@ def titulo_factura(tipo):
     return TIPOS.get(tipo, TIPOS[0])[1]
 
 
+def _bloque_ecf(c, p, h):
+    """QR y validaciones de la factura electronica, debajo de RECIBIDO CONFORME."""
+    try:
+        qr, cod, firma = h["ecf_qr"], h["ecf_cod"], h["ecf_firma"]
+    except (IndexError, KeyError):
+        return
+    if not (qr or cod or firma):
+        return
+    top = 640
+    if qr:
+        import io
+        from reportlab.lib.utils import ImageReader
+        c.drawImage(ImageReader(io.BytesIO(qr)), 32, H - top - 78, 78, 78)
+    x = 118 if qr else 32
+    if cod: p.t(x, top + 46, f"Código Seguridad: {cod}", HB, 8)
+    if firma: p.t(x, top + 58, f"Fecha de Firma Digital: {firma}", HB, 8)
+
+
 def generar_factura(db, nro, ruta):
     h, lines, comments = db.invoice_full(nro)
     tit = titulo_factura(h["tipo"] if h["ncf"] else 0)
@@ -194,6 +212,7 @@ def _render(db, h, lines, comments, ruta, tit, numtxt, ncf, doc_title, num_size=
             p.t(431, 639, "Pesos", TR, 11)
             p.t(584, 638, n2(h["total"]), TR, 12, "r")
             p.t(584, 663, monto_letras(h["total"]), TR, 9, "r")
+            _bloque_ecf(c, p, h)
         p.t(522, 767, "Página", TR, 9)
         p.t(578, 767, str(npag), TR, 9)
         c.showPage()

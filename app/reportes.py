@@ -121,7 +121,7 @@ def _estado_cuenta_monica(db, clientes, desde, hasta, ruta, ap=False):
 
 def _tipo_fact(r):
     if not r or not r["ncf"]: return "Factura"
-    return {1: "Fact. Créd. Fiscal", 2: "Fact. Consumo", 14: "Fact. Reg. Especial", 15: "Fact. Gubernamental"}.get(r["tipo"], "Factura")
+    return {1: "Fact. Créd. Fiscal", 2: "Fact. Consumo", 14: "Fact. Reg. Especial", 15: "Fact. Gubernamental", 16: "Fact. Exportaciones"}.get(r["tipo"], "Factura")
 
 
 def _envolver(texto, font, size, ancho):
@@ -380,7 +380,7 @@ def _facturas_rango(db, d1, d2):
 def _clase(db, r):
     from db import TIPOS
     lab = {0: "Sin comprobante", 1: "Fact. Credito Fiscal", 2: "Fact. Consumidor Final", 14: "Fact. Regimenes Especiales",
-           15: "Fact. Gubernamental"}
+           15: "Fact. Gubernamental", 16: "Fact. Exportaciones"}
     return lab.get(r["tipo"] if r["ncf"] else 0, "Factura")
 
 
