@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.39"
+VERSION = "1.40"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -113,6 +113,34 @@ def pedir_fecha(parent, titulo, texto, inicial):
         fe.es[0].focus_set(); fe.es[0].select_range(0, "end")
     except Exception:
         pass
+    top.wait_window()
+    return res.get("d")
+
+def pedir_hoy_o_fecha(parent, titulo):
+    """Hoy (fecha del sistema) o Al DD / MM / AAAA. OK o Enter acepta. Devuelve date o None."""
+    hoy = datetime.date.today()
+    top = tk.Toplevel(parent); top.title(titulo); top.transient(parent); top.grab_set(); top.resizable(False, False)
+    modo = tk.StringVar(value="hoy"); v = tk.StringVar(value=dmy(hoy)); res = {}
+    fr = ttk.Frame(top); fr.pack(padx=14, pady=(12, 4), anchor="w")
+    ttk.Radiobutton(fr, text=f"Hoy ({dmy(hoy)})", value="hoy", variable=modo).grid(row=0, column=0, sticky="w", pady=3)
+    ttk.Radiobutton(fr, text="Al", value="al", variable=modo).grid(row=1, column=0, sticky="w", pady=3)
+    fe = FechaEntry(fr, v); fe.grid(row=1, column=1, sticky="w", padx=6)
+    for e in fe.es:
+        e.bind("<FocusIn>", lambda ev: modo.set("al"), add="+")
+    def ok(*a):
+        if modo.get() == "hoy":
+            res["d"] = hoy
+        else:
+            try:
+                res["d"] = read_dmy(v.get())
+            except ValueError as e:
+                messagebox.showwarning("Fecha", str(e), parent=top); return
+        top.destroy()
+    bf = ttk.Frame(top); bf.pack(pady=10)
+    ttk.Button(bf, text="OK", command=ok).pack(side="left", padx=6)
+    ttk.Button(bf, text="Cancelar", command=top.destroy).pack(side="left", padx=6)
+    top.bind("<Return>", ok); top.bind("<KP_Enter>", ok); top.bind("<Escape>", lambda e: top.destroy())
+    top.focus_set()
     top.wait_window()
     return res.get("d")
 
@@ -1474,7 +1502,7 @@ class App:
                  ("Ventas por producto", lambda a, b, r, x: reportes.ventas_por_producto(self.db, a, b, r, x)),
                  ("Valor del inventario (a una fecha determinada)", lambda a, b, r: reportes.valor_inventario(self.db, b, r)),
                  ("Órdenes de compra", lambda a, b, r: reportes.ordenes_compra(self.db, a, b, r)),
-                 ("Saldos vencidos (facturas del rango, al día Hasta)", lambda a, b, r: reportes.saldos_vencidos(self.db, a, b, b, r))]
+                 ("Saldos vencidos (a una fecha determinada)", lambda a, b, r: reportes.saldos_vencidos(self.db, a, b, b, r))]
         for i, (lab, fn) in enumerate(items):
             ttk.Button(box, text=lab, width=48, command=lambda lab=lab, fn=fn: self.run_rep(lab, fn)).grid(
                 row=1 + i, column=0, columnspan=5, sticky="w", pady=3)
@@ -1496,14 +1524,20 @@ class App:
         try:
             a, b = read_dmy(self.rd.get()), read_dmy(self.rh.get())
         except ValueError as e:
-            if not lab.startswith("Valor del inventario"):
+            if not lab.startswith(("Valor del inventario", "Saldos vencidos")):
                 messagebox.showwarning("Fechas", str(e)); return
             a = b = datetime.date.today()
         if lab in ("Ventas por cliente", "Ventas por producto"):
             x = self.elegir_para_reporte(lab)
             if x is None: return
             fn = (lambda f, x: lambda a, b, r: f(a, b, r, x or None))(fn, x)
-        if lab.startswith("Valor del inventario"):
+        if lab.startswith("Saldos vencidos"):
+            d = pedir_hoy_o_fecha(self.root, "Saldos vencidos")
+            if d is None: return
+            primera = self.db.one("SELECT MIN(date) FROM invoices WHERE deleted=0")[0]
+            a = parse_date(primera) if primera else d
+            b = d
+        elif lab.startswith("Valor del inventario"):
             d = pedir_fecha(self.root, "Valor del inventario", "Inventario a la fecha:", dmy(datetime.date.today()))
             if d is None: return
             b = d
