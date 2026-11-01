@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.35"
+VERSION = "1.36"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -687,13 +687,13 @@ class DocTab:
 
 
 # ---------------- ventana principal ----------------
-def dialogo_pago(parent, n, saldo):
+def dialogo_pago(parent, n, saldo, doc="factura", forma="Transferencia"):
     """Pago total (el sistema pone el saldo) o parcial (se escribe el monto). Devuelve (monto, fecha, forma, nota) o None."""
-    top = tk.Toplevel(parent); top.title(f"Pago factura {n}"); top.transient(parent); top.grab_set(); top.resizable(False, False)
+    top = tk.Toplevel(parent); top.title(f"Pago {doc} {n}"); top.transient(parent); top.grab_set(); top.resizable(False, False)
     tipo = tk.StringVar(value="total"); vm = tk.StringVar(value=f"{saldo:.2f}")
-    vf = tk.StringVar(value=dmy(datetime.date.today())); vp = tk.StringVar(value="Transferencia"); vn = tk.StringVar()
+    vf = tk.StringVar(value=dmy(datetime.date.today())); vp = tk.StringVar(value=forma); vn = tk.StringVar()
     res = {}
-    ttk.Label(top, text=f"Factura {n}    Saldo pendiente: {m2(saldo)}", font=("Segoe UI", 10, "bold")).grid(
+    ttk.Label(top, text=f"{doc.capitalize()} {n}    Saldo pendiente: {m2(saldo)}", font=("Segoe UI", 10, "bold")).grid(
         row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 6))
     fr = ttk.Frame(top); fr.grid(row=1, column=0, columnspan=2, sticky="w", padx=10)
     em = ttk.Entry(top, textvariable=vm, width=16)
@@ -845,7 +845,7 @@ class App:
         sb.pack(side="right", fill="y"); self.tv_v.pack(fill="both", expand=True)
         self.tv_v.bind("<Double-1>", lambda e: self.ver_pdf())
         for t, cmd in (("Nueva factura", self.nueva), ("Facturación rápida", self.facturacion_rapida), ("Editar", self.editar), ("Ver / descargar PDF", self.ver_pdf),
-                       ("Registrar pago", self.pagar), ("Marcar pagada", self.marcar_pagada),
+                       ("Marcar pagada", self.marcar_pagada),
                        ("Marcar NO pagada (corregir)", self.marcar_no_pagada),
                        ("Asignar NCF", self.asignar_ncf), ("Nota de crédito", lambda: self.nota("NC")),
                        ("Nota de débito", lambda: self.nota("ND")), ("Eliminar (devuelve inventario)", self.eliminar)):
@@ -1295,8 +1295,16 @@ class App:
         n = self.cxp_sel()
         if n is None: return
         s = self.db.ap_saldo(n)
-        if s > 0 and messagebox.askyesno("Pago", f"¿Marcar la compra {n} como pagada hoy por {m2(s)}?"):
-            self.db.add_ap_payment(n, s, "Transferencia", datetime.date.today(), "Marcada pagada"); self.refresh_all()
+        if s <= 0.005:
+            messagebox.showinfo("Pago", "Esa compra ya está pagada."); return
+        r = dialogo_pago(self.root, n, s, doc="compra")
+        if not r: return
+        monto, fecha, forma, nota = r
+        try:
+            self.db.add_ap_payment(n, monto, forma, fecha, nota)
+        except ValueError as e:
+            messagebox.showwarning("Pago", str(e)); return
+        self.refresh_all()
 
     def pdf_estado_p(self):
         try:
@@ -1351,7 +1359,6 @@ class App:
         sb = ttk.Scrollbar(fr, orient="vertical", command=self.tv_x.yview); self.tv_x.configure(yscrollcommand=sb.set)
         b = ttk.Frame(fr); b.pack(side="bottom", fill="x", pady=4)
         sb.pack(side="right", fill="y"); self.tv_x.pack(fill="both", expand=True)
-        ttk.Button(b, text="Registrar pago", command=lambda: self.cxc_do(self.pagar)).pack(side="left", padx=3)
         ttk.Button(b, text="Marcar pagada", command=lambda: self.cxc_do(self.marcar_pagada)).pack(side="left", padx=3)
         ttk.Button(b, text="Ver factura (PDF)", command=lambda: self.cxc_do(self.ver_pdf_nro)).pack(side="left", padx=3)
         self.lbl_x = ttk.Label(b, text="", font=("Segoe UI", 10, "bold")); self.lbl_x.pack(side="right", padx=8)
