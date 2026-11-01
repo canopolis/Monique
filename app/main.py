@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.47"
+VERSION = "1.48"
 TERMINOS = ["Efectivo", "Tarjeta de crédito/débito", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -200,17 +200,17 @@ def menu_edicion(root):
         root.bind_class(clase, "<Button-3>", mostrar, add="+")
 
 
-def confirmar_existencias(db, lines, nro, titulo, parent=None):
+def confirmar_existencias(db, lines, nro, titulo, parent=None, kind="F", doc="la factura"):
     """Avisa si algun producto no alcanza. Devuelve True si se puede seguir."""
-    f = db.faltantes(lines, nro)
+    f = db.faltantes(lines, nro, kind)
     if not f:
         return True
     q = lambda n: f"{n:,.2f}".rstrip("0").rstrip(".")
-    det = "\n".join(f"{c} {d}: hay {q(h)}, la factura lleva {q(l)}, quedaría en {q(r)}" for c, d, h, l, r in f[:20])
+    det = "\n".join(f"{c} {d}: hay {q(h)}, {doc} lleva {q(l)}, quedaría en {q(r)}" for c, d, h, l, r in f[:20])
     if len(f) > 20:
         det += f"\n... y {len(f) - 20} más"
     return messagebox.askyesno(titulo, "No hay existencia suficiente de:\n\n" + det +
-                               "\n\n¿Crear la factura de todos modos?", parent=parent)
+                               f"\n\n¿Crear {doc} de todos modos?", parent=parent)
 
 
 def num(s, default=0.0):
@@ -624,6 +624,11 @@ class InvoiceEditor(tk.Toplevel):
             for k in ("tipo", "ncf"): h.pop(k, None)
             h.update(nro=int(h["nro"]), date=fmt_date(d), due=fmt_date(due), discount=dsc)
             aviso = ""
+            if self.kind == "G" and not getattr(self, "ref_invoice", None):
+                existe = self.db.one("SELECT factura FROM odocs WHERE kind='G' AND nro=?", (h["nro"],))
+                if not (existe and existe["factura"]) and not confirmar_existencias(
+                        self.db, self.lines, h["nro"] if existe else None, "Conduce", self, "G", "el conduce"):
+                    return
             if self.kind in ("NC", "ND"):
                 h["factura"] = self.ref_invoice
                 h["status"] = ("Con devolución" if self.devol.get() else "Sin devolución") if self.kind == "NC" else ""

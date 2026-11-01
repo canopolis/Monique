@@ -381,7 +381,7 @@ class DB:
         m = self.one("SELECT COALESCE(SUM(qty),0) FROM stock_moves WHERE code=?", (code,))[0]
         return base + m
 
-    def faltantes(self, lines, nro=None):
+    def faltantes(self, lines, nro=None, kind="F"):
         """Productos de la factura cuya existencia no alcanza. Si la factura ya existe (nro), cuenta
         lo que ella misma ya tenia descontado. Devuelve [(code, descr, hay, lleva, queda)]."""
         pedir = {}
@@ -390,7 +390,10 @@ class DB:
             if code:
                 pedir[code] = pedir.get(code, 0) + (l.get("qty") or 0)
         propio = {}
-        if nro:
+        if nro and kind == "G":
+            h = self.one("SELECT * FROM odocs WHERE kind='G' AND nro=?", (nro,))
+            propio = self._odoc_qty("G", nro, h, None)
+        elif nro:
             inv = self.one("SELECT deleted FROM invoices WHERE nro=?", (nro,))
             if inv and not inv["deleted"]:
                 for l in self.q("SELECT code, qty FROM lines WHERE nro=?", (nro,)):
