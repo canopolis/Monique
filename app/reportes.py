@@ -722,7 +722,7 @@ def llenado_it1(db, fin, ruta):
     def fila(k, v, peq=None, neg=False):
         c.setFont(HB if neg else H_, 10); c.drawString(56, y[0], k); c.drawRightString(W - 56, y[0], v)
         if peq:
-            nl(12); c.setFont(H_, 8); c.setFillGray(0.4); c.drawString(56, y[0], peq); c.setFillGray(0)
+            nl(14); c.setFont(H_, 10); c.setFillGray(0.3); c.drawString(56, y[0], peq); c.setFillGray(0)
         nl(17)
     c.setFont(HB, 15)
     c.drawString(50, y[0], f"Llenado IT1 electrónico — {ini.strftime('%d/%m/%Y')} al {fin.strftime('%d/%m/%Y')}")
