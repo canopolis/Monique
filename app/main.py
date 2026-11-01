@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.37"
+VERSION = "1.39"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -92,6 +92,29 @@ class FechaEntry(ttk.Frame):
 
 def fecha_entry(parent, var, width=11):
     return FechaEntry(parent, var)
+
+def pedir_fecha(parent, titulo, texto, inicial):
+    """Ventana para escribir una fecha DD / MM / AAAA. OK o Enter acepta. Devuelve date o None."""
+    top = tk.Toplevel(parent); top.title(titulo); top.transient(parent); top.grab_set(); top.resizable(False, False)
+    v = tk.StringVar(value=inicial); res = {}
+    ttk.Label(top, text=texto).pack(padx=14, pady=(12, 6))
+    fe = FechaEntry(top, v); fe.pack(padx=14)
+    def ok(*a):
+        try:
+            res["d"] = read_dmy(v.get())
+        except ValueError as e:
+            messagebox.showwarning("Fecha", str(e), parent=top); return
+        top.destroy()
+    bf = ttk.Frame(top); bf.pack(pady=10)
+    ttk.Button(bf, text="OK", command=ok).pack(side="left", padx=6)
+    ttk.Button(bf, text="Cancelar", command=top.destroy).pack(side="left", padx=6)
+    top.bind("<Return>", ok); top.bind("<KP_Enter>", ok); top.bind("<Escape>", lambda e: top.destroy())
+    try:
+        fe.es[0].focus_set(); fe.es[0].select_range(0, "end")
+    except Exception:
+        pass
+    top.wait_window()
+    return res.get("d")
 
 def num(s, default=0.0):
     s = str(s).replace(",", "").strip()
@@ -1449,7 +1472,7 @@ class App:
                  ("Facturas por producto", lambda a, b, r: reportes.facturas_por_producto(self.db, a, b, r)),
                  ("Ventas por cliente", lambda a, b, r, x: reportes.ventas_por_cliente(self.db, a, b, r, x)),
                  ("Ventas por producto", lambda a, b, r, x: reportes.ventas_por_producto(self.db, a, b, r, x)),
-                 ("Valor del inventario (a la fecha Hasta)", lambda a, b, r: reportes.valor_inventario(self.db, b, r)),
+                 ("Valor del inventario (a una fecha determinada)", lambda a, b, r: reportes.valor_inventario(self.db, b, r)),
                  ("Órdenes de compra", lambda a, b, r: reportes.ordenes_compra(self.db, a, b, r)),
                  ("Saldos vencidos (facturas del rango, al día Hasta)", lambda a, b, r: reportes.saldos_vencidos(self.db, a, b, b, r))]
         for i, (lab, fn) in enumerate(items):
@@ -1473,11 +1496,17 @@ class App:
         try:
             a, b = read_dmy(self.rd.get()), read_dmy(self.rh.get())
         except ValueError as e:
-            messagebox.showwarning("Fechas", str(e)); return
+            if not lab.startswith("Valor del inventario"):
+                messagebox.showwarning("Fechas", str(e)); return
+            a = b = datetime.date.today()
         if lab in ("Ventas por cliente", "Ventas por producto"):
             x = self.elegir_para_reporte(lab)
             if x is None: return
             fn = (lambda f, x: lambda a, b, r: f(a, b, r, x or None))(fn, x)
+        if lab.startswith("Valor del inventario"):
+            d = pedir_fecha(self.root, "Valor del inventario", "Inventario a la fecha:", dmy(datetime.date.today()))
+            if d is None: return
+            b = d
         self.root.config(cursor="watch"); self.root.update()
         try:
             ruta = fn(a, b, self.rep_path(lab.split(" (")[0].replace(" ", "_")))

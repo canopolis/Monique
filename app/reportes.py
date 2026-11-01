@@ -593,8 +593,9 @@ def valor_inventario(db, al, ruta):
             (460, "r", "", "En Almacén"), (528, "r", "", "Valor Invent."), (590, "r", "", "Valor Venta")]
     t = Tabla(db, ruta, tit, cols)
     n = 0; S = [0, 0, 0]
+    existencias = db.stock_al(al)
     for p in db.q("SELECT * FROM products ORDER BY code"):
-        st = db.stock(p["code"])
+        st = existencias.get(p["code"], 0)
         if abs(st) < 1e-9:
             continue
         vi = st * (p["cost"] or 0); vv = st * (p["price"] or 0)

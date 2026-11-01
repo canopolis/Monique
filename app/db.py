@@ -371,6 +371,35 @@ class DB:
         m = self.one("SELECT COALESCE(SUM(qty),0) FROM stock_moves WHERE code=?", (code,))[0]
         return base + m
 
+    def stock_al(self, al):
+        """Existencia de cada producto a la fecha al: a la existencia de hoy se le revierten los documentos
+        con fecha posterior (facturas, conduces, ordenes recibidas, notas de credito con devolucion).
+        Los ajustes manuales del programa no tienen fecha: cuentan solo si al es hoy o despues."""
+        al_s = al if isinstance(al, str) else fmt_date(al)
+        hoy = fmt_date(datetime.date.today())
+        st = {}
+        for p in self.q("SELECT code, stock_base FROM products"):
+            st[p["code"]] = p["stock_base"] or 0
+        for m in self.q("SELECT code, SUM(qty) q FROM stock_moves GROUP BY code"):
+            st[m["code"]] = st.get(m["code"], 0) + m["q"]
+        def mover(code, q):
+            st[code] = st.get(code, 0) + q
+        # facturas posteriores: devolver lo vendido
+        for l in self.q("SELECT l.code, l.qty FROM lines l JOIN invoices i ON i.nro=l.nro "
+                        "WHERE i.deleted=0 AND i.date>?", (al_s,)):
+            if l["code"]:
+                mover(l["code"], l["qty"] or 0)
+        # otros documentos posteriores que mueven inventario
+        for h in self.q("SELECT * FROM odocs WHERE kind IN ('G','O','NC') AND deleted=0 AND date>?", (al_s,)):
+            sign = 1 if h["kind"] in ("O", "NC") else -1
+            for code, q in self._odoc_qty(h["kind"], h["nro"], h, None).items():
+                if code:
+                    mover(code, -sign * q)
+        if al_s < hoy:
+            for m in self.q("SELECT code, SUM(qty) q FROM stock_moves WHERE kind='A' GROUP BY code"):
+                mover(m["code"], -m["q"])
+        return st
+
     def set_sale_price(self, code, price):
         """Precio de venta puesto en una orden de compra: queda en la ficha del producto."""
         p = self.one("SELECT price FROM products WHERE code=?", (code,))
