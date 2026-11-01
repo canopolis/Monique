@@ -226,6 +226,16 @@ DEFAULT_CONFIG = {
     "msg_fact3": "",
 }
 
+def calc_itbis(lines, discount=0):
+    """ITBIS segun el art. 339 de la Ley 11-92: sobre el precio neto, menos descuentos.
+    El descuento de la factura se reparte entre las lineas en proporcion a su monto."""
+    sub = sum(l["qty"] * l["price"] for l in lines)
+    bruto = sum(l["qty"] * l["price"] * (l.get("itbis", 0) or 0) / 100 for l in lines)
+    if sub > 0 and discount:
+        bruto *= max(0.0, 1 - discount / sub)
+    return round(bruto, 2)
+
+
 def fmt_date(d):
     return d.isoformat() if d else ""
 
@@ -531,7 +541,7 @@ class DB:
         nro = int(h["nro"])
         old = self.one("SELECT * FROM invoices WHERE nro=?", (nro,))
         subtotal = round(sum(l["qty"] * l["price"] for l in lines), 2)
-        itbis = round(sum(l["qty"] * l["price"] * (l.get("itbis", 0) or 0) / 100 for l in lines), 2)
+        itbis = calc_itbis(lines, h.get("discount") or 0)
         total = round(subtotal + itbis - (h.get("discount") or 0), 2)
         if old:
             paid_before = old["total"] - old["saldo_base"]
@@ -670,7 +680,7 @@ class DB:
         nro = int(h["nro"])
         old = self.one("SELECT * FROM odocs WHERE kind=? AND nro=?", (kind, nro))
         subtotal = round(sum(l["qty"] * l["price"] for l in lines), 2)
-        itbis = round(sum(l["qty"] * l["price"] * (l.get("itbis", 0) or 0) / 100 for l in lines), 2)
+        itbis = calc_itbis(lines, h.get("discount") or 0)
         total = round(subtotal + itbis - (h.get("discount") or 0), 2)
         cols = ["kind", "nro", "date", "due", "client", "name", "dir1", "dir2", "dir3", "ship_to", "sdir1", "sdir2",
                 "sdir3", "rnc", "terms", "ship_via", "seller", "ref", "comment1", "comment2", "comment3", "subtotal",

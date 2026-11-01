@@ -3,12 +3,12 @@ import os, sys, datetime, traceback, subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
-from db import DB, APP_NAME, con_carpeta_app, leer_ubicacion, guardar_ubicacion, migrar_viejas, crear_subcarpetas, SUB, TIPOS, TIPOS_FACTURA, fmt_date, parse_date
+from db import calc_itbis, DB, APP_NAME, con_carpeta_app, leer_ubicacion, guardar_ubicacion, migrar_viejas, crear_subcarpetas, SUB, TIPOS, TIPOS_FACTURA, fmt_date, parse_date
 from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.42"
+VERSION = "1.43"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -484,9 +484,9 @@ class InvoiceEditor(tk.Toplevel):
                 if pos == i:
                     self.tv.insert("", "end", iid=f"C{k}", values=["", "", "   " + txt] + [""] * (len(vals) - 3))
         sub = sum(l["qty"] * l["price"] for l in self.lines)
-        itb = sum(l["qty"] * l["price"] * (l["itbis"] or 0) / 100 for l in self.lines)
         try: dsc = num(self.v["discount"].get())
         except ValueError: dsc = 0
+        itb = calc_itbis([dict(l, itbis=l["itbis"] or 0) for l in self.lines], dsc)
         self.tot.config(text=f"Subtotal {m2(sub)}   ITBIS {m2(itb)}   TOTAL {m2(sub + itb - dsc)}")
 
     def sel(self):
@@ -1170,7 +1170,7 @@ class App:
 
     # ----- Productos -----
     def tab_productos(self, fr):
-        self.nb.add(fr, text="Productos")
+        self.nb.add(fr, text="Inventario")
         top = ttk.Frame(fr); top.pack(fill="x", pady=4)
         self.ps = tk.StringVar(); self.pinact = tk.BooleanVar(value=False)
         ttk.Label(top, text="Buscar").pack(side="left", padx=3)
