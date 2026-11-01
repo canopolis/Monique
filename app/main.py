@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.36"
+VERSION = "1.37"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -1250,7 +1250,6 @@ class App:
         sb = ttk.Scrollbar(fr, orient="vertical", command=self.tv_p2.yview); self.tv_p2.configure(yscrollcommand=sb.set)
         b = ttk.Frame(fr); b.pack(side="bottom", fill="x", pady=4)
         sb.pack(side="right", fill="y"); self.tv_p2.pack(fill="both", expand=True)
-        ttk.Button(b, text="Registrar pago", command=self.cxp_pagar).pack(side="left", padx=3)
         ttk.Button(b, text="Marcar pagada", command=self.cxp_marcar).pack(side="left", padx=3)
         self.lbl_p2 = ttk.Label(b, text="", font=("Segoe UI", 10, "bold")); self.lbl_p2.pack(side="right", padx=8)
 
