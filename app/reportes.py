@@ -740,17 +740,5 @@ def llenado_it1(db, fin, ruta):
              ", ".join(f"{k} {v}" for k, v in g["c"].items()) + f"; ITBIS {m2(g['itbis'])}")
     if not grupos:
         fila("Sin comprobantes electrónicos en el período", m2(0))
-    h3("Anomalías")
-    c.setFont(H_, 9.5)
-    if not anom:
-        c.drawString(56, y[0], "No hay errores"); nl()
-    for i, txt in enumerate(anom, 1):
-        txt = f"{i}. {txt}"
-        while txt:
-            corte = len(txt)
-            while stringWidth(txt[:corte], H_, 9.5) > W - 112:
-                corte = txt.rfind(" ", 0, corte - 1)
-            c.setFont(H_, 9.5); c.drawString(56, y[0], txt[:corte]); txt = "   " + txt[corte:].strip() if txt[corte:].strip() else ""
-            nl(13)
     c.save()
     return ruta
