@@ -631,3 +631,126 @@ def ordenes_compra(db, d1, d2, ruta):
         S = [S[0] + 1, S[1] + items, S[2] + o["subtotal"], S[3] + imp, S[4] + o["total"], S[5] + saldo]
     t.line(); t.row(["", "Total compra(s):", S[0], S[1], n2(S[2]), n2(S[3]), n2(S[4]), n2(S[5]), ""], True)
     return t.save()
+
+
+# ------------------------------------------------------------------ llenado IT1
+IT1_TIPOS = ["E31", "E32", "E33", "E34", "E44", "E45", "E46"]
+IT1_NOM = {"E31": "Crédito fiscal", "E32": "Consumo", "E33": "Nota de débito", "E34": "Nota de crédito",
+           "E44": "Regímenes especiales", "E45": "Gubernamental", "E46": "Exportaciones"}
+NAT_CRED, NAT_EFEC, NAT_TARJ = "Crédito", "Efectivo (cheque depósito o transferencia)", "Tarjeta de crédito o débito"
+
+
+def _naturaleza(term):
+    import unicodedata
+    t = unicodedata.normalize("NFD", (term or "").upper())
+    t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
+    if "TARJETA" in t:
+        return NAT_TARJ
+    if any(w in t for w in ("EFECTIVO", "CHEQUE", "DEPOSITO", "TRANSFERENCIA")):
+        return NAT_EFEC
+    return NAT_CRED
+
+
+def llenado_it1(db, fin, ruta):
+    """Llenado IT1 electronico del mes que termina en fin (del dia 1 a fin)."""
+    import re
+    ini = fin.replace(day=1)
+    a, b = fmt_date(ini), fmt_date(fin)
+    m2 = lambda n: "RD$" + f"{n:,.2f}"
+    docs, anom = [], []
+    for r in db.q("SELECT * FROM invoices WHERE deleted=0 AND date BETWEEN ? AND ? ORDER BY nro", (a, b)):
+        m = re.search(r"E\d{12}", r["ncf"] or "")
+        if not m:
+            anom.append(f"Factura {r['nro']} ({dmy(r['date'])}, {(r['name'] or '').strip()}) sin comprobante electrónico.")
+            continue
+        if abs((r["subtotal"] or 0) - (r["discount"] or 0) + (r["itbis"] or 0) - (r["total"] or 0)) > 0.01:
+            anom.append(f"Factura {r['nro']}: el total {m2(r['total'] or 0)} no cuadra con subtotal − descuento + ITBIS.")
+        docs.append(dict(ncf=m.group(), tipo=m.group()[:3], seq=int(m.group()[3:]), fecha=r["date"], fact=str(r["nro"]),
+                         total=r["total"] or 0, itbis=r["itbis"] or 0, nat=_naturaleza(r["terms"])))
+    for r in db.q("SELECT * FROM odocs WHERE kind IN ('NC','ND') AND deleted=0 AND date BETWEEN ? AND ? ORDER BY nro", (a, b)):
+        nombre = "Nota de crédito" if r["kind"] == "NC" else "Nota de débito"
+        m = re.search(r"E3[34]\d{10}", r["ncf"] or "")
+        if not m:
+            anom.append(f"{nombre} {r['nro']} ({dmy(r['date'])}) sin comprobante electrónico.")
+            continue
+        nat = NAT_CRED
+        if r["factura"]:
+            f = db.one("SELECT terms FROM invoices WHERE nro=?", (r["factura"],))
+            if f:
+                nat = _naturaleza(f["terms"])
+        docs.append(dict(ncf=m.group(), tipo=m.group()[:3], seq=int(m.group()[3:]), fecha=r["date"],
+                         fact=f"{nombre.lower()} {r['nro']}", total=abs(r["total"] or 0), itbis=abs(r["itbis"] or 0), nat=nat))
+    SG = lambda t: -1 if t == "E34" else 1
+    by = {t: [0, 0.0] for t in IT1_TIPOS}
+    grupos = {}
+    for d in docs:
+        if d["tipo"] not in by:
+            anom.append(f"Comprobante {d['ncf']} (factura {d['fact']}) de un tipo que el IT1 no clasifica.")
+            continue
+        by[d["tipo"]][0] += 1; by[d["tipo"]][1] += d["total"]
+        g = grupos.setdefault(d["nat"], dict(n=0, t=0.0, itbis=0.0, c={}))
+        g["n"] += 1; g["t"] += SG(d["tipo"]) * d["total"]; g["itbis"] += SG(d["tipo"]) * d["itbis"]
+        g["c"][d["tipo"]] = g["c"].get(d["tipo"], 0) + 1
+    vistos = {}
+    for d in docs:
+        vistos.setdefault(d["ncf"], []).append(d["fact"])
+    for n, v in vistos.items():
+        if len(v) > 1:
+            anom.append(f"Comprobante {n} repetido en: {', '.join(v)}.")
+    for t in IT1_TIPOS:
+        L = sorted([d for d in docs if d["tipo"] == t], key=lambda d: d["seq"])
+        for i in range(len(L)):
+            for j in range(i + 1, len(L)):
+                if L[j]["fecha"] < L[i]["fecha"]:
+                    anom.append(f"{L[j]['ncf']} (factura {L[j]['fact']}, {dmy(L[j]['fecha'])}) emitido antes que "
+                                f"{L[i]['ncf']} (factura {L[i]['fact']}, {dmy(L[i]['fecha'])}).")
+        if L:
+            s = {d["seq"] for d in L}
+            falta = [str(x).zfill(3) for x in range(L[0]["seq"], L[-1]["seq"] + 1) if x not in s]
+            if falta:
+                anom.append(f"Saltos de secuencia {t}: {', '.join(falta)}.")
+
+    c = canvas.Canvas(ruta, pagesize=letter); c.setTitle("Llenado IT1 electrónico")
+    W, H = letter
+    y = [H - 50]
+    def nl(h=16):
+        y[0] -= h
+        if y[0] < 60:
+            c.showPage(); y[0] = H - 50
+    def h3(t):
+        nl(4); c.setFont(HB, 12); c.drawString(50, y[0], t); c.setLineWidth(0.6); c.line(50, y[0] - 4, W - 50, y[0] - 4); nl(20)
+    def fila(k, v, peq=None, neg=False):
+        c.setFont(HB if neg else H_, 10); c.drawString(56, y[0], k); c.drawRightString(W - 56, y[0], v)
+        if peq:
+            nl(12); c.setFont(H_, 8); c.setFillGray(0.4); c.drawString(56, y[0], peq); c.setFillGray(0)
+        nl(17)
+    c.setFont(HB, 15)
+    c.drawString(50, y[0], f"Llenado IT1 electrónico — {ini.strftime('%d/%m/%Y')} al {fin.strftime('%d/%m/%Y')}")
+    nl(28)
+    h3("Por codificación")
+    for t in IT1_TIPOS:
+        fila(f"{t} {IT1_NOM[t]}: {by[t][0]} comprobantes", ("−" if t == "E34" and by[t][1] else "") + m2(by[t][1]))
+    fila(f"Total neto: {sum(v[0] for v in by.values())} comprobantes", m2(sum(SG(t) * by[t][1] for t in IT1_TIPOS)),
+         "E34 restado", True)
+    h3("Por naturaleza de venta")
+    orden = [NAT_CRED, NAT_EFEC, NAT_TARJ]
+    for n in sorted(grupos, key=lambda x: orden.index(x) if x in orden else 9):
+        g = grupos[n]
+        fila(f"{n}: {g['n']} comprobantes", m2(g["t"]),
+             ", ".join(f"{k} {v}" for k, v in g["c"].items()) + f"; ITBIS {m2(g['itbis'])}")
+    if not grupos:
+        fila("Sin comprobantes electrónicos en el período", m2(0))
+    h3("Anomalías")
+    c.setFont(H_, 9.5)
+    if not anom:
+        c.drawString(56, y[0], "No hay errores"); nl()
+    for i, txt in enumerate(anom, 1):
+        txt = f"{i}. {txt}"
+        while txt:
+            corte = len(txt)
+            while stringWidth(txt[:corte], H_, 9.5) > W - 112:
+                corte = txt.rfind(" ", 0, corte - 1)
+            c.setFont(H_, 9.5); c.drawString(56, y[0], txt[:corte]); txt = "   " + txt[corte:].strip() if txt[corte:].strip() else ""
+            nl(13)
+    c.save()
+    return ruta

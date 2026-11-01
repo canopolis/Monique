@@ -8,8 +8,8 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.43"
-TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
+VERSION = "1.45"
+TERMINOS = ["Efectivo", "Tarjeta de crédito/débito", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
 
@@ -143,6 +143,62 @@ def pedir_hoy_o_fecha(parent, titulo):
     top.focus_set()
     top.wait_window()
     return res.get("d")
+
+def menu_edicion(root):
+    """Clic derecho en cualquier casilla: Cortar, Copiar, Pegar, Borrar y Seleccionar todo."""
+    m = tk.Menu(root, tearoff=0)
+    def estado_editable(w):
+        try:
+            if hasattr(w, "instate") and (w.instate(["readonly"]) or w.instate(["disabled"])):
+                return False
+            return str(w.cget("state")) not in ("disabled", "readonly")
+        except Exception:
+            return True
+    def hay_sel(w):
+        try:
+            if isinstance(w, tk.Text):
+                return bool(w.tag_ranges("sel"))
+            return w.selection_present()
+        except Exception:
+            return False
+    def borrar(w):
+        if isinstance(w, tk.Text):
+            if w.tag_ranges("sel"): w.delete("sel.first", "sel.last")
+            else: w.delete("1.0", "end")
+        else:
+            if w.selection_present(): w.delete("sel.first", "sel.last")
+            else: w.delete(0, "end")
+    def sel_todo(w):
+        if isinstance(w, tk.Text):
+            w.tag_add("sel", "1.0", "end-1c")
+        else:
+            w.selection_range(0, "end"); w.icursor("end")
+    def mostrar(ev):
+        w = ev.widget
+        try:
+            w.focus_set()
+        except Exception:
+            pass
+        ed, sel = estado_editable(w), hay_sel(w)
+        try:
+            pegable = bool(root.clipboard_get())
+        except Exception:
+            pegable = False
+        m.delete(0, "end")
+        m.add_command(label="Cortar", state="normal" if ed and sel else "disabled", command=lambda: w.event_generate("<<Cut>>"))
+        m.add_command(label="Copiar", state="normal" if sel else "disabled", command=lambda: w.event_generate("<<Copy>>"))
+        m.add_command(label="Pegar", state="normal" if ed and pegable else "disabled", command=lambda: w.event_generate("<<Paste>>"))
+        m.add_command(label="Borrar", state="normal" if ed else "disabled", command=lambda: borrar(w))
+        m.add_separator()
+        m.add_command(label="Seleccionar todo", command=lambda: sel_todo(w))
+        try:
+            m.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            m.grab_release()
+        return "break"
+    for clase in ("Entry", "TEntry", "TCombobox", "Text", "Spinbox", "TSpinbox"):
+        root.bind_class(clase, "<Button-3>", mostrar, add="+")
+
 
 def num(s, default=0.0):
     s = str(s).replace(",", "").strip()
@@ -811,7 +867,7 @@ def elegir_carpeta_inicial(root):
 
 class App:
     def __init__(self):
-        self.root = tk.Tk(); self.root.withdraw()
+        self.root = tk.Tk(); self.root.withdraw(); menu_edicion(self.root)
         loc = elegir_carpeta_inicial(self.root)
         self.db = DB(loc=loc)
         self.root.deiconify()
@@ -1501,7 +1557,8 @@ class App:
                  ("Ventas por producto", lambda a, b, r, x: reportes.ventas_por_producto(self.db, a, b, r, x)),
                  ("Valor del inventario (a una fecha determinada)", lambda a, b, r: reportes.valor_inventario(self.db, b, r)),
                  ("Órdenes de compra", lambda a, b, r: reportes.ordenes_compra(self.db, a, b, r)),
-                 ("Saldos vencidos (a una fecha determinada)", lambda a, b, r: reportes.saldos_vencidos(self.db, a, b, b, r))]
+                 ("Saldos vencidos (a una fecha determinada)", lambda a, b, r: reportes.saldos_vencidos(self.db, a, b, b, r)),
+                 ("Llenado de IT1", lambda a, b, r: reportes.llenado_it1(self.db, b, r))]
         for i, (lab, fn) in enumerate(items):
             ttk.Button(box, text=lab, width=48, command=lambda lab=lab, fn=fn: self.run_rep(lab, fn)).grid(
                 row=1 + i, column=0, columnspan=5, sticky="w", pady=3)
@@ -1523,7 +1580,7 @@ class App:
         try:
             a, b = read_dmy(self.rd.get()), read_dmy(self.rh.get())
         except ValueError as e:
-            if not lab.startswith(("Valor del inventario", "Saldos vencidos")):
+            if not lab.startswith(("Valor del inventario", "Saldos vencidos", "Llenado de IT1")):
                 messagebox.showwarning("Fechas", str(e)); return
             a = b = datetime.date.today()
         if lab in ("Ventas por cliente", "Ventas por producto"):
@@ -1536,6 +1593,19 @@ class App:
             primera = self.db.one("SELECT MIN(date) FROM invoices WHERE deleted=0")[0]
             a = parse_date(primera) if primera else d
             b = d
+        elif lab == "Llenado de IT1":
+            hoy = datetime.date.today()
+            ult = (hoy.replace(day=1) - datetime.timedelta(days=1))
+            while True:
+                d = pedir_fecha(self.root, "Llenado de IT1", "Último día del mes:", dmy(ult))
+                if d is None: return
+                if (d + datetime.timedelta(days=1)).day == 1: break
+                fin_mes = (d.replace(day=28) + datetime.timedelta(days=4))
+                fin_mes = fin_mes - datetime.timedelta(days=fin_mes.day)
+                messagebox.showwarning("Llenado de IT1", f"{dmy(d)} no es el último día del mes.\n"
+                                       f"El último día de ese mes es {dmy(fin_mes)}.")
+                ult = fin_mes
+            a, b = d.replace(day=1), d
         elif lab.startswith("Valor del inventario"):
             d = pedir_fecha(self.root, "Valor del inventario", "Inventario a la fecha:", dmy(datetime.date.today()))
             if d is None: return
