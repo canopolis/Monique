@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.40"
+VERSION = "1.42"
 TERMINOS = ["Efectivo", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -1493,8 +1493,7 @@ class App:
         ttk.Label(box, text="Desde").grid(row=0, column=0, sticky="e"); fecha_entry(box, self.rd, 12).grid(row=0, column=1, sticky="w", padx=4)
         ttk.Label(box, text="Hasta").grid(row=0, column=2, sticky="e"); fecha_entry(box, self.rh, 12).grid(row=0, column=3, sticky="w", padx=4)
         ttk.Button(box, text="Desde la primera factura", command=lambda: self.rd.set(dmy(self.db.one("SELECT MIN(date) FROM invoices")[0] or fmt_date(hoy)))).grid(row=0, column=4, padx=8)
-        items = [("Relación de facturas", lambda a, b, r: reportes.relacion_facturas(self.db, a, b, r)),
-                 ("Facturas por clase", lambda a, b, r: reportes.relacion_facturas(self.db, a, b, r, True)),
+        items = [("Ventas por fechas", lambda a, b, r: reportes.relacion_facturas(self.db, a, b, r)),
                  ("Facturas por NCF", lambda a, b, r: reportes.facturas_por_ncf(self.db, a, b, r)),
                  ("ITBIS cobrado", lambda a, b, r: reportes.itbis_cobrado(self.db, a, b, r)),
                  ("Facturas por producto", lambda a, b, r: reportes.facturas_por_producto(self.db, a, b, r)),

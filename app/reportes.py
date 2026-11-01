@@ -398,32 +398,41 @@ def _clase(db, r):
 
 
 def relacion_facturas(db, d1, d2, ruta, por_clase=False):
+    """Ventas por fechas: facturas agrupadas por clase de comprobante, con descuento e ITBIS separados."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
     dias = (d2 - d1).days
-    tit = [f"Relación de Facturas desde {dmy(d1)} hasta {dmy(d2)}" + (" Por clase" if por_clase else ""),
-           f"( Para {dias} dias, En Pesos )"]
-    cols = [(15, "l", "", "Fecha"), (65, "l", "", "Cliente"), (232, "r", "Nro.", "Factura"), (258, "r", "Total", "Items"),
-            (318, "r", "Costo", "factura"), (380, "r", "Subtotal", "valor neto"), (440, "r", "Imp. + Misc. -", "Descuento"),
-            (505, "r", "Total", "Factura"), (588, "r", "Subtotal -", "Costo")]
+    tit = [f"Ventas por fechas desde {dmy(d1)} hasta {dmy(d2)}", f"( Para {dias} dias, En Pesos )"]
+    cols = [(15, "l", "", "Fecha"), (62, "l", "", "Cliente"), (236, "r", "Nro.", "Factura"), (262, "r", "Total", "Items"),
+            (318, "r", "Costo", "factura"), (374, "r", "Subtotal", "valor neto"), (426, "r", "", "Descuento"),
+            (478, "r", "", "ITBIS"), (535, "r", "Total", "Factura"), (590, "r", "", "Ganancia")]
+    lim = 236 - 22 - 62   # espacio del nombre antes del numero de factura
+    def nombre(s):
+        s = s or ""
+        while s and stringWidth(s, TR, 8) > lim:
+            s = s[:-1]
+        return s
     t = Tabla(db, ruta, tit, cols)
     fs = _facturas_rango(db, d1, d2)
     grupos = {}
     for f in fs:
         grupos.setdefault(_clase(db, f["r"]), []).append(f)
-    G = [0, 0, 0, 0, 0, 0, 0]
+    G = [0] * 8
     for g in sorted(grupos):
         t.space(4); t.text(25, g, True)
-        S = [0, 0, 0, 0, 0, 0, 0]
+        S = [0] * 8
         for f in grupos[g]:
             r = f["r"]
-            t.row([dmy(r["date"]), (r["name"] or "")[:25], r["nro"], f["items"], n2(f["costo"]), n2(r["subtotal"]),
-                   n2(f["imp"]), n2(r["total"]), n2(r["subtotal"] - f["costo"])])
-            for i, v in enumerate((1, f["items"], f["costo"], r["subtotal"], f["imp"], r["total"], r["subtotal"] - f["costo"])):
-                S[i] += v
+            de = r["discount"] or 0; it = r["itbis"] or 0
+            gan = r["subtotal"] - de - f["costo"]
+            t.row([dmy(r["date"]), nombre(r["name"]), r["nro"], f["items"], n2(f["costo"]), n2(r["subtotal"]),
+                   n2(de), n2(it), n2(r["total"]), n2(gan)])
+            for k, v in enumerate((1, f["items"], f["costo"], r["subtotal"], de, it, r["total"], gan)):
+                S[k] += v
         t.line()
-        t.row(["", "", S[0], S[1], n2(S[2]), n2(S[3]), n2(S[4]), n2(S[5]), n2(S[6])], True)
+        t.row(["", "", S[0], S[1]] + [n2(v) for v in S[2:]], True)
         G = [a + b for a, b in zip(G, S)]
     t.space(10)
-    t.row(["", "Total factura(s):", G[0], G[1], n2(G[2]), n2(G[3]), n2(G[4]), n2(G[5]), n2(G[6])], True)
+    t.row(["", "Total factura(s):", G[0], G[1]] + [n2(v) for v in G[2:]], True)
     return t.save()
 
 
