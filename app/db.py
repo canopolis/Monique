@@ -381,6 +381,30 @@ class DB:
         m = self.one("SELECT COALESCE(SUM(qty),0) FROM stock_moves WHERE code=?", (code,))[0]
         return base + m
 
+    def faltantes(self, lines, nro=None):
+        """Productos de la factura cuya existencia no alcanza. Si la factura ya existe (nro), cuenta
+        lo que ella misma ya tenia descontado. Devuelve [(code, descr, hay, lleva, queda)]."""
+        pedir = {}
+        for l in lines:
+            code = (l.get("code") or "").strip()
+            if code:
+                pedir[code] = pedir.get(code, 0) + (l.get("qty") or 0)
+        propio = {}
+        if nro:
+            inv = self.one("SELECT deleted FROM invoices WHERE nro=?", (nro,))
+            if inv and not inv["deleted"]:
+                for l in self.q("SELECT code, qty FROM lines WHERE nro=?", (nro,)):
+                    propio[l["code"]] = propio.get(l["code"], 0) + l["qty"]
+        out = []
+        for code, q in pedir.items():
+            p = self.one("SELECT descr FROM products WHERE code=?", (code,))
+            if not p or q <= 0:
+                continue
+            hay = self.stock(code) + propio.get(code, 0)
+            if q > hay + 1e-9:
+                out.append((code, p["descr"], hay, q, hay - q))
+        return out
+
     def stock_al(self, al):
         """Existencia de cada producto a la fecha al: a la existencia de hoy se le revierten los documentos
         con fecha posterior (facturas, conduces, ordenes recibidas, notas de credito con devolucion).

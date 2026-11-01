@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.46"
+VERSION = "1.47"
 TERMINOS = ["Efectivo", "Tarjeta de crédito/débito", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -198,6 +198,19 @@ def menu_edicion(root):
         return "break"
     for clase in ("Entry", "TEntry", "TCombobox", "Text", "Spinbox", "TSpinbox"):
         root.bind_class(clase, "<Button-3>", mostrar, add="+")
+
+
+def confirmar_existencias(db, lines, nro, titulo, parent=None):
+    """Avisa si algun producto no alcanza. Devuelve True si se puede seguir."""
+    f = db.faltantes(lines, nro)
+    if not f:
+        return True
+    q = lambda n: f"{n:,.2f}".rstrip("0").rstrip(".")
+    det = "\n".join(f"{c} {d}: hay {q(h)}, la factura lleva {q(l)}, quedaría en {q(r)}" for c, d, h, l, r in f[:20])
+    if len(f) > 20:
+        det += f"\n... y {len(f) - 20} más"
+    return messagebox.askyesno(titulo, "No hay existencia suficiente de:\n\n" + det +
+                               "\n\n¿Crear la factura de todos modos?", parent=parent)
 
 
 def num(s, default=0.0):
@@ -633,6 +646,8 @@ class InvoiceEditor(tk.Toplevel):
             open_file(ruta); self.destroy(); return
         tipo = self.tipo_code()
         h.update(nro=int(h["nro"]), date=fmt_date(d), due=fmt_date(due), discount=dsc, tipo=tipo)
+        if not confirmar_existencias(self.db, self.lines, h["nro"] if self.orig else None, "Factura", self):
+            return
         aviso = ""
         ncf = h["ncf"]
         if self.orig and ncf and tipo != self.orig["tipo"]:
@@ -1076,6 +1091,8 @@ class App:
             if not messagebox.askyesno("Facturación rápida", f"El total de la GTI es {m2(g['total'])} y la suma de los productos da "
                                        f"{m2(sub + itb)}.\n¿Crear la factura igual?"):
                 return
+        if not confirmar_existencias(self.db, lines, None, "Facturación rápida"):
+            return
         nro = self.db.next_invoice_no()   # siempre el numero que corresponde en el programa
         b = self.db.client_print_block(cl["code"])
         dias = (g["vence"] - g["fecha"]).days if g["vence"] and g["fecha"] else 0
