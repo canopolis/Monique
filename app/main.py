@@ -8,7 +8,70 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.52"
+VERSION = "1.53"
+
+
+def _askyesno_si_no(title=None, message=None, **opts):
+    """Pregunta con botones Sí / No (reemplaza el Yes/No de Windows)."""
+    parent = opts.get("parent") or tk._default_root
+    win = tk.Toplevel(parent)
+    win.withdraw()
+    win.title(title or "")
+    win.resizable(False, False)
+    try:
+        if parent is not None and parent.winfo_viewable():
+            win.transient(parent)
+    except Exception:
+        pass
+    res = {"v": False}
+    def responder(v):
+        res["v"] = v
+        win.destroy()
+    cuerpo = ttk.Frame(win, padding=(18, 16, 18, 8))
+    cuerpo.pack(fill="both", expand=True)
+    try:
+        ttk.Label(cuerpo, image="::tk::icons::question").grid(row=0, column=0, sticky="n", padx=(0, 12))
+    except Exception:
+        pass
+    ttk.Label(cuerpo, text=message or "", justify="left", wraplength=460).grid(row=0, column=1, sticky="w")
+    botones = ttk.Frame(win, padding=(18, 4, 18, 14))
+    botones.pack(fill="x")
+    b_no = ttk.Button(botones, text="No", width=10, command=lambda: responder(False))
+    b_no.pack(side="right")
+    b_si = ttk.Button(botones, text="Sí", width=10, command=lambda: responder(True))
+    b_si.pack(side="right", padx=(0, 8))
+    win.protocol("WM_DELETE_WINDOW", lambda: responder(False))
+    win.bind("<Escape>", lambda e: responder(False))
+    win.bind("<Return>", lambda e: responder(e.widget is not b_no))
+    win.update_idletasks()
+    w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+    try:
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        if pw < 50 or ph < 50:
+            raise ValueError
+        x, y = px + (pw - w) // 2, py + (ph - h) // 3
+    except Exception:
+        x, y = (win.winfo_screenwidth() - w) // 2, (win.winfo_screenheight() - h) // 3
+    win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    win.deiconify()
+    win.lift()
+    win.attributes("-topmost", True)
+    win.after(200, lambda: win.winfo_exists() and win.attributes("-topmost", False))
+    try:
+        win.bell()
+    except Exception:
+        pass
+    b_si.focus_set()
+    try:
+        win.grab_set()
+    except Exception:
+        pass
+    win.wait_window()
+    return res["v"]
+
+
+messagebox.askyesno = _askyesno_si_no
 TERMINOS = ["Efectivo", "Tarjeta de crédito/débito", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
