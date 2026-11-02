@@ -322,6 +322,8 @@ class DB:
             WHERE EXISTS (SELECT 1 FROM clients c WHERE c.code=invoices.client AND c.name<>''
                           AND invoices.name<>c.name
                           AND (invoices.name=c.contact OR lower(invoices.name)=lower(c.name)))""")
+        # A104 (RNC 131670709) es Vet Plaza: nombre comercial VET PLAZA, conserva su propio RNC
+        self.con.execute("UPDATE clients SET name='VET PLAZA' WHERE code='A104' AND name='LLUBERES LORA'")
         # facturas de Monica: siempre el nombre comercial del cliente (Monica guardaba a veces el encargado
         # de pagos o una variante). El cliente independiente conserva el nombre escrito en cada factura.
         self.con.execute("""UPDATE invoices SET name=(SELECT c.name FROM clients c WHERE c.code=invoices.client)
