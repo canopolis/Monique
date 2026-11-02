@@ -322,6 +322,11 @@ class DB:
             WHERE EXISTS (SELECT 1 FROM clients c WHERE c.code=invoices.client AND c.name<>''
                           AND invoices.name<>c.name
                           AND (invoices.name=c.contact OR lower(invoices.name)=lower(c.name)))""")
+        # facturas de Monica: siempre el nombre comercial del cliente (Monica guardaba a veces el encargado
+        # de pagos o una variante). El cliente independiente conserva el nombre escrito en cada factura.
+        self.con.execute("""UPDATE invoices SET name=(SELECT c.name FROM clients c WHERE c.code=invoices.client)
+            WHERE origin='monica' AND client<>'CLIENTE' AND EXISTS (SELECT 1 FROM clients c
+                WHERE c.code=invoices.client AND trim(c.name)<>'' AND invoices.name<>c.name)""")
         # el "enviado a" de cotizaciones y conduces de Monica traia el contacto: no se usa como nombre
         self.con.execute("UPDATE odocs SET ship_to='' WHERE kind IN ('Q','G') AND ship_to<>''")
         self.con.execute("""UPDATE odocs SET name=(SELECT c.name FROM clients c WHERE c.code=odocs.client)
