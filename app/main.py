@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.53"
+VERSION = "1.54"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
@@ -1041,6 +1041,17 @@ class App:
                        ("Nota de débito", lambda: self.nota("ND")), ("Eliminar (devuelve inventario)", self.eliminar)):
             ttk.Button(b, text=t, command=cmd).pack(side="left", padx=3)
         self.lbl_v = ttk.Label(b, text=""); self.lbl_v.pack(side="right", padx=8)
+        # Menu contextual (clic derecho) con las opciones de la factura
+        self.menu_v = tk.Menu(self.root, tearoff=0)
+        for t, cmd in (("Editar", self.editar), ("Ver / descargar PDF", self.ver_pdf),
+                       ("Marcar pagada", self.marcar_pagada),
+                       ("Marcar NO pagada (corregir)", self.marcar_no_pagada),
+                       ("Asignar NCF", self.asignar_ncf), ("Nota de crédito", lambda: self.nota("NC")),
+                       ("Nota de débito", lambda: self.nota("ND")), ("Eliminar (devuelve inventario)", self.eliminar)):
+            self.menu_v.add_command(label=t, command=cmd)
+        self.menu_v.add_separator()
+        self.menu_v.add_command(label="Cerrar", command=self.menu_v.unpost)
+        self.tv_v.bind("<Button-3>", self.menu_ventas)
 
     def rango_total(self):
         first = self.db.one("SELECT MIN(date) FROM invoices")[0]
@@ -1069,6 +1080,16 @@ class App:
                 tipo_nombre(tipo), m2(r["total"]), m2(saldo), estado))
             tot += r["total"]; n += 1
         self.lbl_v.config(text=f"{n} facturas   Total {m2(tot)}")
+
+    def menu_ventas(self, ev):
+        fila = self.tv_v.identify_row(ev.y)
+        if not fila or fila not in self.tv_v.selection():
+            return "break"
+        try:
+            self.menu_v.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            self.menu_v.grab_release()
+        return "break"
 
     def sel_v(self):
         s = self.tv_v.selection()
