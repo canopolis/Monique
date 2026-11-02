@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.49"
+VERSION = "1.50"
 TERMINOS = ["Efectivo", "Tarjeta de crédito/débito", "15 Días", "30 Días", "45 Días", "60 Días", "Credito", "Otros"]
 DIAS = {"15 Días": 15, "30 Días": 30, "45 Días": 45, "60 Días": 60, "Credito": 30}
 
@@ -1489,6 +1489,13 @@ class App:
         sb.pack(side="right", fill="y"); self.tv_x.pack(fill="both", expand=True)
         ttk.Button(b, text="Marcar pagada", command=lambda: self.cxc_do(self.marcar_pagada)).pack(side="left", padx=3)
         ttk.Button(b, text="Ver factura (PDF)", command=lambda: self.cxc_do(self.ver_pdf_nro)).pack(side="left", padx=3)
+        ttk.Button(b, text="Pagadas recientemente", command=self.cxc_pagadas).pack(side="left", padx=12)
+        self.mnu_x = tk.Menu(self.root, tearoff=0)
+        self.mnu_x.add_command(label="Ver factura", command=lambda: self.cxc_do(self.ver_pdf_nro))
+        self.mnu_x.add_command(label="Pagar", command=lambda: self.cxc_do(self.marcar_pagada))
+        self.mnu_x.add_separator()
+        self.mnu_x.add_command(label="Cancelar", command=lambda: self.mnu_x.unpost())
+        self.tv_x.bind("<Button-3>", self.cxc_menu)
         self.lbl_x = ttk.Label(b, text="", font=("Segoe UI", 10, "bold")); self.lbl_x.pack(side="right", padx=8)
 
     def cxc_pick(self):
@@ -1509,6 +1516,50 @@ class App:
                 dias if dias > 0 else ""))
             tot += saldo
         self.lbl_x.config(text=f"Total por cobrar {m2(tot)}")
+
+    def cxc_menu(self, ev):
+        fila = self.tv_x.identify_row(ev.y)
+        if not fila:
+            return
+        self.tv_x.selection_set(fila); self.tv_x.focus(fila)
+        try:
+            self.mnu_x.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            self.mnu_x.grab_release()
+
+    def cxc_pagadas(self):
+        top = tk.Toplevel(self.root); top.title("Pagadas recientemente"); top.transient(self.root)
+        ttk.Label(top, text="Últimas 10 facturas pagadas por completo").pack(anchor="w", padx=10, pady=(10, 4))
+        cols = ("Nro", "Fecha", "Cliente", "Total", "Pagada el")
+        tv = ttk.Treeview(top, columns=cols, show="headings", height=10)
+        for c, w in zip(cols, (70, 90, 330, 110, 90)):
+            tv.heading(c, text=c); tv.column(c, width=w, anchor="e" if c in ("Nro", "Total") else "w")
+        tv.pack(fill="both", expand=True, padx=10)
+        def cargar():
+            tv.delete(*tv.get_children())
+            for inv, fp in self.db.pagadas_recientes(10):
+                tv.insert("", "end", iid=str(inv["nro"]), values=(inv["nro"], dmy(inv["date"]), inv["name"], m2(inv["total"]), dmy(fp)))
+        def sel():
+            s = tv.selection()
+            if not s:
+                messagebox.showinfo("Pagadas recientemente", "Seleccione una factura.", parent=top); return None
+            return int(s[0])
+        def ver():
+            n = sel()
+            if n is not None: self.ver_pdf_nro(n)
+        def reversar():
+            n = sel()
+            if n is None: return
+            inv = self.db.one("SELECT total FROM invoices WHERE nro=?", (n,))
+            if messagebox.askyesno("Corregir factura", f"La factura {n} aparece pagada.\n\n¿Marcarla como NO pagada?\n"
+                                   f"Se quitan sus pagos y queda con saldo {m2(inv['total'])}.", parent=top):
+                self.db.mark_unpaid(n); self.refresh_all(); cargar()
+        bf = ttk.Frame(top); bf.pack(fill="x", padx=10, pady=10)
+        ttk.Button(bf, text="Ver factura", command=ver).pack(side="left", padx=3)
+        ttk.Button(bf, text="Marcar NO pagada (corregir)", command=reversar).pack(side="left", padx=3)
+        ttk.Button(bf, text="Cerrar", command=top.destroy).pack(side="right", padx=3)
+        tv.bind("<Double-1>", lambda e: ver())
+        cargar()
 
     def cxc_do(self, fn):
         s = self.tv_x.selection()

@@ -616,6 +616,23 @@ class DB:
             self._rebuild_moves(nro)
         self.con.commit()
 
+    def pagadas_recientes(self, limite=10):
+        """Ultimas facturas pagadas por completo, por fecha de su ultimo pago: [(inv, fecha_pago)]."""
+        filas = self.q("SELECT nro, MAX(d) d FROM ("
+                       " SELECT nro, date d FROM payments"
+                       " UNION ALL SELECT nro_fact nro, date d FROM ledger WHERE tipo='P' AND nro_fact>0"
+                       ") GROUP BY nro ORDER BY d DESC, nro DESC")
+        out = []
+        for f in filas:
+            inv = self.one("SELECT * FROM invoices WHERE nro=? AND deleted=0", (f["nro"],))
+            if not inv or (inv["total"] or 0) <= 0 or inv["unpaid"]:
+                continue
+            if self.invoice_saldo(f["nro"]) <= 0.005:
+                out.append((inv, f["d"]))
+                if len(out) >= limite:
+                    break
+        return out
+
     def mark_unpaid(self, nro):
         """Corrige una factura marcada como pagada por error: quita los pagos y la deja con saldo = total."""
         self.con.execute("DELETE FROM payments WHERE nro=?", (nro,))
