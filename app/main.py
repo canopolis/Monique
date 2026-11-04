@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.55"
+VERSION = "1.56"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
@@ -310,11 +310,11 @@ def tipo_nombre(t):
 
 class Picker(tk.Toplevel):
     """Ventana de busqueda: escribe para filtrar, doble clic o Enter para elegir."""
-    def __init__(self, parent, title, cols, rows, widths=None):
+    def __init__(self, parent, title, cols, rows, widths=None, inicial=""):
         super().__init__(parent)
         self.title(title); self.result = None; self.rows = rows
         self.transient(parent); self.grab_set(); self.geometry("760x460")
-        self.var = tk.StringVar()
+        self.var = tk.StringVar(value=inicial)
         e = ttk.Entry(self, textvariable=self.var); e.pack(fill="x", padx=8, pady=6); e.focus_set()
         self.tv = ttk.Treeview(self, columns=cols, show="headings")
         for i, c in enumerate(cols):
@@ -1465,6 +1465,21 @@ class App:
         sb.pack(side="right", fill="y"); self.tv_p2.pack(fill="both", expand=True)
         ttk.Button(b, text="Marcar pagada", command=self.cxp_marcar).pack(side="left", padx=3)
         self.lbl_p2 = ttk.Label(b, text="", font=("Segoe UI", 10, "bold")); self.lbl_p2.pack(side="right", padx=8)
+        self.mnu_p2 = tk.Menu(self.root, tearoff=0)
+        self.mnu_p2.add_command(label="Marcar pagada", command=self.cxp_marcar)
+        self.mnu_p2.add_separator()
+        self.mnu_p2.add_command(label="Cerrar", command=self.mnu_p2.unpost)
+        self.tv_p2.bind("<Button-3>", self.cxp_menu)
+
+    def cxp_menu(self, ev):
+        fila = self.tv_p2.identify_row(ev.y)
+        if not fila or fila not in self.tv_p2.selection():
+            return "break"
+        try:
+            self.mnu_p2.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            self.mnu_p2.grab_release()
+        return "break"
 
     def cxp_pick(self):
         rows = [(c["code"], c["name"]) for c in self.db.q("SELECT * FROM clients WHERE ctype='S' ORDER BY name")]
@@ -1540,7 +1555,8 @@ class App:
         top = ttk.Frame(fr); top.pack(fill="x", pady=4)
         self.xc = tk.StringVar(); self.xn = tk.StringVar(value="(todos los clientes)")
         ttk.Label(top, text="Cliente").pack(side="left", padx=3)
-        ttk.Entry(top, textvariable=self.xc, width=10).pack(side="left")
+        ex = ttk.Entry(top, textvariable=self.xc, width=18); ex.pack(side="left")
+        ex.bind("<Return>", lambda e: self.cxc_pick())
         ttk.Button(top, text="Buscar", command=self.cxc_pick).pack(side="left", padx=3)
         ttk.Button(top, text="Todos", command=lambda: (self.xc.set(""), self.xn.set("(todos los clientes)"), self.load_cxc())).pack(side="left")
         ttk.Label(top, textvariable=self.xn, font=("Segoe UI", 10, "bold")).pack(side="left", padx=8)
@@ -1584,9 +1600,18 @@ class App:
 
     def cxc_pick(self):
         rows = [(c["code"], c["name"], c["rnc"] or "") for c in self.db.q("SELECT * FROM clients WHERE COALESCE(ctype,'C')='C' ORDER BY name")]
-        p = Picker(self.root, "Buscar cliente", ("Código", "Nombre", "RNC"), rows, [90, 380, 150])
+        txt = self.xc.get().strip()
+        if txt:
+            t = txt.lower()
+            if not any(t in " ".join(str(x) for x in r).lower() for r in rows):
+                messagebox.showinfo("Cuentas por cobrar", f"Cliente no encontrado: {txt}"); return
+        p = Picker(self.root, "Buscar cliente", ("Código", "Nombre", "RNC"), rows, [90, 380, 150], inicial=txt)
         if p.result:
-            self.xc.set(p.result[0]); self.xn.set(p.result[1]); self.load_cxc()
+            cod = str(p.result[0]); nom = str(p.result[1])
+            for r in rows:
+                if str(r[0]).strip().lower() == cod.strip().lower():
+                    cod, nom = r[0], r[1]; break
+            self.xc.set(cod); self.xn.set(nom); self.load_cxc()
 
     def load_cxc(self):
         self.tv_x.delete(*self.tv_x.get_children())
