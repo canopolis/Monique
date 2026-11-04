@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.54"
+VERSION = "1.55"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
@@ -1643,6 +1643,21 @@ class App:
         ttk.Button(bf, text="Marcar NO pagada (corregir)", command=reversar).pack(side="left", padx=3)
         ttk.Button(bf, text="Cerrar", command=top.destroy).pack(side="right", padx=3)
         tv.bind("<Double-1>", lambda e: ver())
+        mnu = tk.Menu(top, tearoff=0)
+        mnu.add_command(label="Ver factura", command=ver)
+        mnu.add_command(label="Marcar NO pagada (corregir)", command=reversar)
+        mnu.add_separator()
+        mnu.add_command(label="Cerrar", command=mnu.unpost)
+        def menu(ev):
+            fila = tv.identify_row(ev.y)
+            if not fila or fila not in tv.selection():
+                return "break"
+            try:
+                mnu.tk_popup(ev.x_root, ev.y_root)
+            finally:
+                mnu.grab_release()
+            return "break"
+        tv.bind("<Button-3>", menu)
         cargar()
 
     def cxc_do(self, fn):
