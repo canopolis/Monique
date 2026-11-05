@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.56"
+VERSION = "1.57"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
@@ -1123,6 +1123,8 @@ class App:
             g = leer_gti(path)
         except Exception as e:
             messagebox.showerror("Facturación rápida", f"No se pudo leer el PDF:\n{e}"); return
+        if self.completar_desde_gti(g):
+            return
         errores = []
         if not g["ncf"]: errores.append("No se encontró el e-NCF en el PDF.")
         elif g["tipo"] not in TIPOS_FACTURA or not g["tipo"]:
@@ -1201,6 +1203,42 @@ class App:
         messagebox.showinfo("Facturación rápida", f"Factura {nro} creada para {b['name']}\n"
                             f"e-NCF {g['ncf']}   Total {m2(sub + itb)}\nSe descontó el inventario.")
         open_file(ruta)
+
+    def completar_desde_gti(self, g):
+        """Si el e-NCF de la GTI ya esta en una factura del programa (y el numero interno coincide),
+        no crea factura nueva: completa en esa factura lo que le falte (QR, codigo de seguridad, firma)."""
+        if not g.get("ncf"):
+            return False
+        nro = self.db.ncf_usado(g["ncf"])
+        if nro is None:
+            return False
+        interno = (g.get("interno") or "").strip()
+        if interno and interno.isdigit() and int(interno) != int(nro):
+            return False   # el e-NCF esta en otra factura: sigue el flujo normal (avisa el error)
+        emp = "".join(ch for ch in (self.db.cfg("emp_l5") or "") if ch.isdigit())
+        if g.get("emisor_rnc") and emp and g["emisor_rnc"] != emp:
+            return False
+        h = self.db.one("SELECT * FROM invoices WHERE nro=?", (nro,))
+        nuevo = {}
+        if g.get("qr") and not h["ecf_qr"]: nuevo["ecf_qr"] = g["qr"]
+        if g.get("codigo_seguridad") and not (h["ecf_cod"] or "").strip(): nuevo["ecf_cod"] = g["codigo_seguridad"]
+        if g.get("fecha_firma") and not (h["ecf_firma"] or "").strip(): nuevo["ecf_firma"] = g["fecha_firma"]
+        if not nuevo:
+            messagebox.showinfo("Facturación rápida", f"La factura {nro} con e-NCF {g['ncf']} ya existe y está completa.\n"
+                                "No se creó ninguna factura nueva."); return True
+        try:
+            self.db.con.execute("UPDATE invoices SET " + ", ".join(f"{k}=?" for k in nuevo) + " WHERE nro=?",
+                                (*nuevo.values(), nro))
+            self.db.con.commit()
+            ruta = self.pdf_path(nro); generar_factura(self.db, nro, ruta)
+        except Exception as e:
+            messagebox.showerror("Facturación rápida", f"No se pudo completar la factura {nro}:\n{e}"); return True
+        nombres = {"ecf_qr": "código QR", "ecf_cod": "código de seguridad", "ecf_firma": "fecha de firma digital"}
+        self.refresh_all()
+        messagebox.showinfo("Facturación rápida", f"La factura {nro} con e-NCF {g['ncf']} ya existía.\n"
+                            "No se creó factura nueva. Se le añadió: " + ", ".join(nombres[k] for k in nuevo) + ".")
+        open_file(ruta)
+        return True
 
     def editar(self):
         n = self.sel_v()
