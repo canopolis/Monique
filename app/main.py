@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.60"
+VERSION = "1.61"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
@@ -308,6 +308,26 @@ def tipo_nombre(t):
     return TIPOS.get(t, TIPOS[0])[0]
 
 
+def menu_derecho(tv, parent, opciones):
+    """Menu de clic derecho estilo Windows sobre la fila ya seleccionada con clic izquierdo."""
+    mnu = tk.Menu(parent, tearoff=0)
+    for t, cmd in opciones:
+        mnu.add_command(label=t, command=cmd)
+    mnu.add_separator()
+    mnu.add_command(label="Cerrar", command=mnu.unpost)
+    def abrir(ev):
+        fila = tv.identify_row(ev.y)
+        if not fila or fila not in tv.selection():
+            return "break"
+        try:
+            mnu.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            mnu.grab_release()
+        return "break"
+    tv.bind("<Button-3>", abrir)
+    return mnu
+
+
 class Picker(tk.Toplevel):
     """Ventana de busqueda: escribe para filtrar, doble clic o Enter para elegir."""
     def __init__(self, parent, title, cols, rows, widths=None, inicial=""):
@@ -501,6 +521,8 @@ class InvoiceEditor(tk.Toplevel):
             self.tv.heading(c, text=c); self.tv.column(c, width=w, anchor="e" if c in ("Cantidad", "Precio", "Costo", "ITBIS %", "Subtotal", "Precio venta", "Existencia") else "w")
         self.tv.pack(fill="both", expand=True)
         self.tv.bind("<Double-1>", lambda e: self.edit_line())
+        menu_derecho(self.tv, self, (("Cambiar cantidad/precio", self.edit_line), ("Quitar línea", self.del_line),
+                                     ("Agregar comentario a la línea", self.add_comment)))
         bf = ttk.Frame(lf); bf.pack(fill="x", pady=4)
         ttk.Button(bf, text="Cambiar cantidad/precio", command=self.edit_line).pack(side="left", padx=3)
         ttk.Button(bf, text="Quitar línea", command=self.del_line).pack(side="left", padx=3)
@@ -779,7 +801,7 @@ class DocTab:
         for t, cmd in acts:
             ttk.Button(b, text=t, command=cmd).pack(side="left", padx=3)
         self.lbl = ttk.Label(b, text=""); self.lbl.pack(side="right", padx=8)
-        if kind == "O":   # menu de clic derecho solo en Ordenes de compra
+        if True:   # menu de clic derecho en todas estas pestanas
             self.mnu = tk.Menu(app.root, tearoff=0)
             for t, cmd in acts:
                 if t != "Nuevo":
@@ -1356,6 +1378,7 @@ class App:
             self.tv_c.heading(c, text=c); self.tv_c.column(c, width=w, anchor="e" if c == "Saldo" else "w")
         self.tv_c.pack(fill="both", expand=True)
         self.tv_c.bind("<Double-1>", lambda e: self.edit_client(self.tv_c.selection()[0] if self.tv_c.selection() else None, True))
+        menu_derecho(self.tv_c, self.root, (("Editar", lambda: self.edit_client(self.tv_c.selection()[0] if self.tv_c.selection() else None, True)),))
 
     def load_clientes(self):
         self.tv_c.delete(*self.tv_c.get_children())
@@ -1906,6 +1929,8 @@ class App:
             self.tv_s.heading(c, text=c); self.tv_s.column(c, width=w)
         self.tv_s.tag_configure("low", background="#fff3cd"); self.tv_s.tag_configure("off", foreground="#888")
         self.tv_s.pack(fill="both", expand=True)
+        menu_derecho(self.tv_s, self.root, (("Editar", lambda: self.edit_seq(self.sel_s(), True)),
+                                            ("Activar / desactivar", self.toggle_seq)))
         ttk.Label(fr, text="Para el e-CF el prefijo es como Monica lo guarda, por ejemplo  ......E3100  (crédito fiscal) o  ......E3200  "
                            "(consumidor final). El NCF queda: prefijo + número de 8 dígitos.").pack(anchor="w", padx=6, pady=4)
 
