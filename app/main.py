@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.57"
+VERSION = "1.58"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
@@ -779,6 +779,24 @@ class DocTab:
         for t, cmd in acts:
             ttk.Button(b, text=t, command=cmd).pack(side="left", padx=3)
         self.lbl = ttk.Label(b, text=""); self.lbl.pack(side="right", padx=8)
+        if kind == "O":   # menu de clic derecho solo en Ordenes de compra
+            self.mnu = tk.Menu(app.root, tearoff=0)
+            for t, cmd in acts:
+                if t != "Nuevo":
+                    self.mnu.add_command(label=t, command=cmd)
+            self.mnu.add_separator()
+            self.mnu.add_command(label="Cerrar", command=self.mnu.unpost)
+            self.tv.bind("<Button-3>", self.menu)
+
+    def menu(self, ev):
+        fila = self.tv.identify_row(ev.y)
+        if not fila or fila not in self.tv.selection():
+            return "break"
+        try:
+            self.mnu.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            self.mnu.grab_release()
+        return "break"
 
     def load(self):
         try:
@@ -1388,6 +1406,24 @@ class App:
             self.tv_p.heading(c, text=c); self.tv_p.column(c, width=w, anchor="w" if c in ("Código", "Descripción", "Estado") else "e")
         self.tv_p.pack(fill="both", expand=True)
         self.tv_p.bind("<Double-1>", lambda e: self.edit_prod(self.sel_p(), True))
+        self.mnu_p = tk.Menu(self.root, tearoff=0)
+        self.mnu_p.add_command(label="Editar", command=lambda: self.edit_prod(self.sel_p(), True))
+        self.mnu_p.add_command(label="Ajustar existencia", command=self.ajustar)
+        self.mnu_p.add_command(label="Desactivar / activar", command=self.toggle_prod)
+        self.mnu_p.add_command(label="Eliminar producto", command=self.eliminar_prod)
+        self.mnu_p.add_separator()
+        self.mnu_p.add_command(label="Cerrar", command=self.mnu_p.unpost)
+        self.tv_p.bind("<Button-3>", self.prod_menu)
+
+    def prod_menu(self, ev):
+        fila = self.tv_p.identify_row(ev.y)
+        if not fila or fila not in self.tv_p.selection():
+            return "break"
+        try:
+            self.mnu_p.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            self.mnu_p.grab_release()
+        return "break"
 
     def sel_p(self):
         s = self.tv_p.selection(); return s[0] if s else None
