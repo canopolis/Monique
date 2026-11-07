@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.58"
+VERSION = "1.59"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
@@ -1181,7 +1181,8 @@ class App:
                 if cl is None: errores.append("No existe el cliente independiente en el programa.")
         lines = []
         for it in g["items"]:
-            pr = self.db.one("SELECT * FROM products WHERE code=?", (it["code"],))
+            # el codigo debe ser identico al del inventario (sin importar mayusculas/minusculas); el nombre puede variar
+            pr = self.db.one("SELECT * FROM products WHERE upper(trim(code))=upper(trim(?)) ORDER BY code", (str(it["code"]),))
             if not pr:
                 errores.append(f"No existe el producto {it['code']} ({it['descr']})."); continue
             precio = round(it["total"] / it["qty"], 4) if it["descuento"] and it["qty"] else it["price"]
