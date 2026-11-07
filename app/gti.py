@@ -67,6 +67,18 @@ def leer_gti(ruta):
             break
         items.append(dict(code=code, descr=" ".join(desc).strip(), qty=qty, price=price, descuento=dsc, total=tot))
         i = j + 4
+    if not items:
+        # formato con cada producto en una sola linea: No Codigo Descripcion Cantidad Precio Descuento Total
+        fila = re.compile(r"^(\d+)\s+(\S+)\s+(.*?)\s+(-?[\d,]+(?:\.\d+)?)\s+(-?[\d,]+(?:\.\d+)?)\s+"
+                          r"(-?[\d,]+(?:\.\d+)?)\s+(-?[\d,]+(?:\.\d+)?)$")
+        ini = next((k + 1 for k, x in enumerate(L) if "Total Item" in x), None)
+        if ini is not None:
+            for x in L[ini:]:
+                m = fila.match(x.strip())
+                if not m:
+                    break
+                items.append(dict(code=m.group(2), descr=m.group(3).strip(), qty=_num(m.group(4)), price=_num(m.group(5)),
+                                  descuento=_num(m.group(6)), total=_num(m.group(7))))
     d["items"] = items
     # codigo QR: la imagen cuadrada mas grande de la factura
     qr = None; mejor = 0

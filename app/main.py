@@ -8,7 +8,7 @@ from importer import import_backup
 from pdf_factura import generar_factura, generar_conduce, generar_cotizacion, generar_nota
 import reportes
 
-VERSION = "1.59"
+VERSION = "1.60"
 
 
 def _askyesno_si_no(title=None, message=None, **opts):
